@@ -1,0 +1,154 @@
+{
+  "projectName": "mcp-bluehost-imap-readonly",
+  "goal": "Build a local MCP server for Claude Desktop that can READ (only) email from a Bluehost-hosted IMAP mailbox. No sending, deleting, moving, or marking read in v1.",
+  "runtime": {
+    "language": "TypeScript",
+    "nodeVersion": ">=18",
+    "transport": "stdio",
+    "targetClient": "Claude Desktop"
+  },
+  "nonGoals": [
+    "SMTP support",
+    "Replying or sending emails",
+    "Deleting/moving emails",
+    "Marking as read/unread",
+    "Auto-polling or background sync",
+    "Full-text search across all history (v1)"
+  ],
+  "securityModel": {
+    "readOnly": true,
+    "noMutation": "Server must not call any IMAP commands that modify mailbox state (no STORE flags, no COPY, no MOVE, no EXPUNGE). Use read-only mode when selecting mailbox.",
+    "secretHandling": [
+      "Credentials must ONLY be read from environment variables or a local .env file not committed to git",
+      "Never echo passwords in tool outputs",
+      "Do not log raw email bodies by default"
+    ],
+    "dataMinimization": [
+      "List tools return metadata + short snippet only",
+      "Fetch tool returns plain-text body, trimmed, and optional limited HTML-to-text conversion",
+      "Attachments are NOT downloaded in v1 (only list attachment names/sizes)"
+    ]
+  },
+  "tools": [
+    {
+      "name": "imap_healthcheck",
+      "description": "Tests IMAP connectivity and authentication. Returns mailbox list (names only) and server capabilities (if available).",
+      "inputSchema": {
+        "mailbox": "optional string, default INBOX"
+      },
+      "output": "Text summary: connected yes/no, mailbox exists yes/no, message count if available."
+    },
+    {
+      "name": "list_recent_emails",
+      "description": "Lists the most recent emails from a mailbox with metadata only (no full body).",
+      "inputSchema": {
+        "mailbox": "optional string, default INBOX",
+        "limit": "integer 1..20, default 10",
+        "unreadOnly": "boolean, default false"
+      },
+      "output": "JSON-like list: [{id, uid, date, from, subject, hasAttachments, snippet}]"
+    },
+    {
+      "name": "get_email",
+      "description": "Fetch a single email by uid and return a cleaned plain-text body plus metadata. Must not mark as read.",
+      "inputSchema": {
+        "mailbox": "optional string, default INBOX",
+        "uid": "required integer",
+        "maxChars": "integer 1000..20000, default 8000",
+        "includeHeaders": "boolean, default true",
+        "includeHtmlAsText": "boolean, default true"
+      },
+      "output": "JSON-like object: {uid, date, from, to, cc, subject, bodyText, attachments:[{filename, contentType, size}]}"
+    }
+  ],
+  "imapRequirements": {
+    "library": "Use imapflow (preferred) or node-imap. Must support opening mailbox in read-only mode.",
+    "connection": {
+      "hostEnv": "IMAP_HOST",
+      "portEnv": "IMAP_PORT (default 993)",
+      "secureEnv": "IMAP_SECURE (default true)",
+      "userEnv": "IMAP_USER",
+      "passEnv": "IMAP_PASS"
+    },
+    "mailboxMode": "Open mailbox with readOnly=true always.",
+    "fetchStrategy": [
+      "For list_recent_emails: fetch envelope + flags + bodystructure (for attachments) + a small body preview if possible",
+      "Never set \\Seen, never store flags"
+    ]
+  },
+  "repoStructure": {
+    "files": [
+      "package.json",
+      "tsconfig.json",
+      "server.ts",
+      "src/imap/client.ts",
+      "src/imap/parsers.ts",
+      "src/tools/imap_healthcheck.ts",
+      "src/tools/list_recent_emails.ts",
+      "src/tools/get_email.ts",
+      ".env.example",
+      "README.md",
+      ".gitignore"
+    ]
+  },
+  "implementationSteps": [
+    "Initialize npm project and install dependencies: @modelcontextprotocol/sdk, zod, imapflow, mailparser (optional), html-to-text (optional), dotenv.",
+    "Create MCP server using @modelcontextprotocol/sdk with StdioServerTransport.",
+    "Implement IMAP client wrapper that: connects, authenticates, opens mailbox read-only, fetches message metadata, fetches body without marking seen, then logs out and closes cleanly.",
+    "Implement parsing utilities: decode headers safely, derive from display name/email, sanitize subject, create snippet (first N chars of text/plain or converted html).",
+    "Implement tools exactly as defined in the tools list with Zod schemas and consistent output formatting.",
+    "Add robust error handling: auth failure, mailbox missing, uid not found, timeouts. Return human-readable error messages without secrets.",
+    "Add .env.example and ensure .env is gitignored.",
+    "Write README with: setup, env vars, running locally, and Claude Desktop config snippet."
+  ],
+  "dependencies": {
+    "prod": [
+      "@modelcontextprotocol/sdk",
+      "zod",
+      "imapflow",
+      "dotenv"
+    ],
+    "optional": [
+      "mailparser",
+      "html-to-text"
+    ],
+    "dev": [
+      "typescript",
+      "tsx",
+      "@types/node"
+    ]
+  },
+  "acceptanceCriteria": [
+    "Server runs locally via `npm run start` and exposes the three tools.",
+    "Selecting mailbox is always read-only and server does not mutate email state.",
+    "list_recent_emails returns stable uid values and readable metadata.",
+    "get_email returns cleaned plain text capped by maxChars and does not mark messages as read.",
+    "No credentials appear in logs or tool outputs.",
+    "Claude Desktop can call the tools successfully using stdio MCP configuration."
+  ],
+  "claudeDesktopConfigSnippet": {
+    "pathHints": {
+      "macOS": "~/Library/Application Support/Claude/claude_desktop_config.json",
+      "windows": "%APPDATA%\\Claude\\claude_desktop_config.json"
+    },
+    "json": {
+      "mcpServers": {
+        "mcp-bluehost-imap-readonly": {
+          "command": "npm",
+          "args": ["run", "start"],
+          "cwd": "<ABSOLUTE_PATH_TO_REPO>"
+        }
+      }
+    }
+  },
+  "packageJsonScripts": {
+    "start": "tsx server.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "readmeChecklist": [
+    "How to set IMAP_HOST/IMAP_USER/IMAP_PASS and test healthcheck tool",
+    "How to register MCP server in Claude Desktop config",
+    "Example prompts to Claude: 'use list_recent_emails limit=5' and 'use get_email uid=12345'",
+    "Troubleshooting: wrong IMAP host/port, SSL issues, auth failures"
+  ]
+}

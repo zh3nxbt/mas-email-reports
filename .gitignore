@@ -1,0 +1,21 @@
+node_modules
+.env
+.DS_Store
+
+# Next.js
+.next
+out
+
+# Database
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Drizzle
+drizzle/
+
+# IDE
+.idea
+.vscode
