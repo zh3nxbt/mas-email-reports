@@ -8,13 +8,36 @@ import { eq, and, inArray } from "drizzle-orm";
 import type { NewEmail } from "@/db/schema";
 
 const MAILBOXES = ["INBOX", "Sent", "Sent Messages"];
+// Initial sync date - only used on first run
 // Jan 26, 2026 00:00 EST = Jan 26, 2026 05:00 UTC
-const SYNC_SINCE = new Date("2026-01-26T05:00:00.000Z");
+const INITIAL_SYNC_DATE = new Date("2026-01-26T05:00:00.000Z");
+// Buffer days to overlap when doing incremental sync (IMAP SINCE is date-only)
+const SYNC_OVERLAP_DAYS = 1;
 
 export interface SyncStats {
   emailsSynced: number;
   mailboxesProcessed: string[];
   errors: string[];
+}
+
+async function getLastSyncTime(mailbox: string): Promise<Date | null> {
+  const result = await db
+    .select({ lastSyncAt: schema.syncMetadata.lastSyncAt })
+    .from(schema.syncMetadata)
+    .where(eq(schema.syncMetadata.mailbox, mailbox))
+    .limit(1);
+
+  return result.length > 0 ? result[0].lastSyncAt : null;
+}
+
+async function updateLastSyncTime(mailbox: string, syncTime: Date): Promise<void> {
+  await db
+    .insert(schema.syncMetadata)
+    .values({ mailbox, lastSyncAt: syncTime })
+    .onConflictDoUpdate({
+      target: schema.syncMetadata.mailbox,
+      set: { lastSyncAt: syncTime },
+    });
 }
 
 async function getExistingUids(mailbox: string, uids: number[]): Promise<Set<number>> {
@@ -47,15 +70,29 @@ async function syncMailbox(
 
     console.log(`Syncing mailbox: ${mailbox} (${mailboxInfo.exists} messages)`);
 
-    // Search for messages since cutoff date
-    const sinceDate = SYNC_SINCE;
+    // Get last sync time for incremental sync
+    const lastSync = await getLastSyncTime(mailbox);
+    let sinceDate: Date;
 
-    // Search for messages in date range
+    if (lastSync) {
+      // Incremental sync: go back SYNC_OVERLAP_DAYS to catch any late arrivals
+      sinceDate = new Date(lastSync);
+      sinceDate.setDate(sinceDate.getDate() - SYNC_OVERLAP_DAYS);
+      console.log(`Incremental sync from ${sinceDate.toDateString()} (last sync: ${lastSync.toDateString()})`);
+    } else {
+      // First sync: use initial date
+      sinceDate = INITIAL_SYNC_DATE;
+      console.log(`Initial sync from ${sinceDate.toDateString()}`);
+    }
+
+    // Search for messages since the cutoff date
     const searchResult = await client.search({ since: sinceDate }, { uid: true });
     const uids = Array.isArray(searchResult) ? searchResult : [];
     console.log(`Found ${uids.length} messages since ${sinceDate.toDateString()}`);
 
     if (uids.length === 0) {
+      // Still update last sync time even if no messages
+      await updateLastSyncTime(mailbox, new Date());
       return { synced: 0 };
     }
 
@@ -65,6 +102,7 @@ async function syncMailbox(
     console.log(`${uidsToSync.length} new emails to sync`);
 
     if (uidsToSync.length === 0) {
+      await updateLastSyncTime(mailbox, new Date());
       return { synced: 0 };
     }
 
@@ -121,6 +159,9 @@ async function syncMailbox(
         console.error(`  Error syncing UID ${uid}:`, error);
       }
     }
+
+    // Update last sync time after successful sync
+    await updateLastSyncTime(mailbox, new Date());
 
     return { synced };
   } catch (error: any) {

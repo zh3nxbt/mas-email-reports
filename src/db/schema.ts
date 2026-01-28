@@ -81,6 +81,14 @@ export const dismissedThreads = pgTable("email_dismissed_threads", {
   reason: text("reason"), // "manual" or "auto"
 });
 
+// Sync metadata - tracks last sync time per mailbox for incremental sync
+export const syncMetadata = pgTable("email_sync_metadata", {
+  id: serial("id").primaryKey(),
+  mailbox: text("mailbox").notNull().unique(),
+  lastSyncAt: timestamp("last_sync_at").notNull(),
+  lastUid: integer("last_uid"), // Highest UID synced
+});
+
 // Type exports
 export type Email = typeof emails.$inferSelect;
 export type NewEmail = typeof emails.$inferInsert;
@@ -92,6 +100,8 @@ export type TodoItem = typeof todoItems.$inferSelect;
 export type NewTodoItem = typeof todoItems.$inferInsert;
 export type DismissedThread = typeof dismissedThreads.$inferSelect;
 export type NewDismissedThread = typeof dismissedThreads.$inferInsert;
+export type SyncMetadata = typeof syncMetadata.$inferSelect;
+export type NewSyncMetadata = typeof syncMetadata.$inferInsert;
 
 export type ReportType = "daily_summary" | "morning_reminder";
 export type Category = "customer" | "vendor" | "other";
