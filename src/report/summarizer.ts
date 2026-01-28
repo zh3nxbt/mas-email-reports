@@ -103,6 +103,11 @@ For EACH thread, determine:
    - Implicit: "What would it cost...", "Can you provide pricing...", "How much for..."
    - Capability inquiries: "Do you manufacture X?", "Can you make these parts?"
 
+   NOT a quote request (use "general" instead):
+   - Document requests: packing slip, shipping label, certificate, spec sheet, drawing
+   - Status inquiries: "Where is my order?", "When will it ship?"
+   - General follow-ups: "Did you receive our PO?", "Any updates?"
+
 3. CONTACT_NAME - The person/company name from the external party
 
 4. SUMMARY - A 1-2 sentence summary of the thread's key content/status
@@ -263,6 +268,11 @@ Analyze this thread and provide:
    - Explicit: "RFQ", "Request for quote", "Please quote", "Quotation request"
    - Implicit: "What would it cost...", "Can you provide pricing...", "How much for..."
    - Capability inquiries: "Do you manufacture X?", "Can you make these parts?"
+
+   NOT a quote request (use "general" instead):
+   - Document requests: packing slip, shipping label, certificate, spec sheet, drawing
+   - Status inquiries: "Where is my order?", "When will it ship?"
+   - General follow-ups: "Did you receive our PO?", "Any updates?"
 
 3. CONTACT_NAME - The person/company name from the external party (customer or vendor)
 
