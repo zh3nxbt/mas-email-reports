@@ -375,8 +375,8 @@ export function generateDailySummaryHtml(
 }
 
 // Generate morning reminder HTML
-export function generateMorningReminderHtml(data: MorningReportData): string {
-  const dateStr = new Date().toLocaleDateString("en-US", {
+export function generateMorningReminderHtml(data: MorningReportData, reportDate: Date): string {
+  const dateStr = reportDate.toLocaleDateString("en-US", {
     timeZone: "America/New_York",
     weekday: "long",
     month: "long",

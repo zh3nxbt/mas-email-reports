@@ -290,8 +290,9 @@ export async function generateDailySummary(options: ReportOptions = {}): Promise
   const { received, sent } = countEmailsByDirection(emails);
 
   // Step 6: Generate HTML (pass displayTodos for rendering with resolved status)
+  // Use window.end for the title date - it's correctly set to 4pm EST on the target day
   console.log("\nStep 5: Generating report...");
-  const html = generateDailySummaryHtml(reportDate, received, sent, threads, displayTodos);
+  const html = generateDailySummaryHtml(window.end, received, sent, threads, displayTodos);
 
   return {
     reportDate,
@@ -405,7 +406,8 @@ export async function generateMorningReminder(options: ReportOptions = {}): Prom
     overnightSent,
   };
 
-  const html = generateMorningReminderHtml(data);
+  // Use window.end for the title date - it's correctly set to 7am EST on the target day
+  const html = generateMorningReminderHtml(data, window.end);
 
   return { reportDate, data, html };
 }

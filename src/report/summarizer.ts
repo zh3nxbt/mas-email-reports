@@ -41,8 +41,9 @@ export async function categorizeThreadsBatch(
     return {};
   }
 
-  // Format threads as JSON for the prompt
-  const threadsJson = threads.map((thread) => {
+  // Format threads as JSON for the prompt - use indices instead of threadKeys
+  // to avoid AI making mistakes with long message IDs
+  const threadsJson = threads.map((thread, index) => {
     const sorted = [...thread.emails].sort((a, b) => {
       const dateA = a.date ? new Date(a.date).getTime() : 0;
       const dateB = b.date ? new Date(b.date).getTime() : 0;
@@ -50,7 +51,7 @@ export async function categorizeThreadsBatch(
     });
 
     return {
-      threadKey: thread.threadKey,
+      index, // Use simple numeric index instead of complex threadKey
       initialCategory: thread.initialCategory,
       emails: sorted.map((email) => ({
         direction: email.isOutbound ? "SENT" : "RECEIVED",
@@ -69,7 +70,7 @@ export async function categorizeThreadsBatch(
 CONTEXT:
 - Emails with direction "SENT" are FROM us (MAS Precision Parts)
 - Emails with direction "RECEIVED" are TO us (from external parties)
-- Each thread includes an initialCategory guess based on first email direction
+- Each thread has an "index" number and an initialCategory guess based on first email direction
 
 INPUT THREADS:
 ${JSON.stringify(threadsJson, null, 2)}
@@ -125,13 +126,13 @@ For EACH thread, determine:
    - Contains question: "Got it. When can you ship?"
    - Makes a request: "Thanks! Also, can you expedite this?"
 
-6. RELATED_TO - If this thread is clearly a RESPONSE to another thread (e.g., a vendor quote/estimate that responds to our RFQ), provide the threadKey of that related thread. Look for:
+6. RELATED_TO - If this thread is clearly a RESPONSE to another thread (e.g., a vendor quote/estimate that responds to our RFQ), provide the INDEX of that related thread. Look for:
    - Quotes/Estimates that respond to RFQs we sent (same vendor, matching part numbers, timing)
    - POs that follow quotes
    - Use null if not related to another thread
 
-Respond with JSON only, no markdown. The response MUST include results for ALL ${threads.length} threads:
-{"results": [{"threadKey": "...", "category": "customer|vendor|other", "item_type": "po_received|po_sent|quote_request|general|other", "contact_name": "name or null", "summary": "brief summary", "needs_response": true|false, "related_to": "threadKey or null"}, ...]}`;
+Respond with JSON only, no markdown. The response MUST include results for ALL ${threads.length} threads, using the same index numbers:
+{"results": [{"index": 0, "category": "customer|vendor|other", "item_type": "po_received|po_sent|quote_request|general|other", "contact_name": "name or null", "summary": "brief summary", "needs_response": true|false, "related_to": null}, ...]}`;
 
   try {
     const response = await anthropic.messages.create({
@@ -151,13 +152,13 @@ Respond with JSON only, no markdown. The response MUST include results for ALL $
 
     const parsed = JSON.parse("{" + content.text) as {
       results: Array<{
-        threadKey: string;
+        index: number;
         category: string;
         item_type: string;
         contact_name: string | null;
         summary: string;
         needs_response: boolean;
-        related_to: string | null;
+        related_to: number | null;
       }>;
     };
 
@@ -167,37 +168,42 @@ Respond with JSON only, no markdown. The response MUST include results for ALL $
 
     const resultMap: BatchCategorizationResult = {};
 
-    // Build a lookup for initial categories
-    const initialCategoryMap = new Map<string, Category>();
-    for (const thread of threads) {
-      initialCategoryMap.set(thread.threadKey, thread.initialCategory);
-    }
-
+    // Build a map from index to result
+    const resultsByIndex = new Map<number, typeof parsed.results[0]>();
     for (const result of parsed.results) {
-      const initialCategory = initialCategoryMap.get(result.threadKey) || "other";
-
-      const category = validCategories.includes(result.category as Category)
-        ? (result.category as Category)
-        : initialCategory;
-
-      const itemType = validItemTypes.includes(result.item_type as ItemType)
-        ? (result.item_type as ItemType)
-        : "general";
-
-      resultMap[result.threadKey] = {
-        category,
-        itemType,
-        contactName: result.contact_name,
-        summary: result.summary,
-        needsResponse: result.needs_response !== false, // Default to true if not specified
-        relatedTo: result.related_to || null,
-      };
+      resultsByIndex.set(result.index, result);
     }
 
-    // Fill in any missing threads with defaults
-    for (const thread of threads) {
-      if (!resultMap[thread.threadKey]) {
-        console.warn(`Batch response missing thread ${thread.threadKey}, using defaults`);
+    // Map results back to threadKeys using index
+    for (let i = 0; i < threads.length; i++) {
+      const thread = threads[i];
+      const result = resultsByIndex.get(i);
+
+      if (result) {
+        const category = validCategories.includes(result.category as Category)
+          ? (result.category as Category)
+          : thread.initialCategory;
+
+        const itemType = validItemTypes.includes(result.item_type as ItemType)
+          ? (result.item_type as ItemType)
+          : "general";
+
+        // Convert related_to index back to threadKey
+        let relatedTo: string | null = null;
+        if (result.related_to !== null && result.related_to >= 0 && result.related_to < threads.length) {
+          relatedTo = threads[result.related_to].threadKey;
+        }
+
+        resultMap[thread.threadKey] = {
+          category,
+          itemType,
+          contactName: result.contact_name,
+          summary: result.summary,
+          needsResponse: result.needs_response !== false, // Default to true if not specified
+          relatedTo,
+        };
+      } else {
+        console.warn(`Batch response missing thread index ${i} (${thread.threadKey.slice(0, 40)}...), using defaults`);
         resultMap[thread.threadKey] = {
           category: thread.initialCategory,
           itemType: "general",
