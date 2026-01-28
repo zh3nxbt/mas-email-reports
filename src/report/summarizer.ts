@@ -114,17 +114,19 @@ For EACH thread, determine:
 4. SUMMARY - A 1-2 sentence summary of the thread's key content/status
 
 5. NEEDS_RESPONSE - Does the LAST email in this thread require a response from us?
-   Set to FALSE (no response needed) for simple acknowledgments:
-   - Standard: "Thanks!", "Thank you!", "Got it!", "Perfect!", "Received!"
-   - Natural variations: "That works!", "Sounds good!", "Confirmed!", "Noted with thanks!"
+   Set to FALSE (no response needed) for:
+   - Simple acknowledgments: "Thanks!", "Got it!", "Perfect!", "Sounds good!", "Confirmed!"
    - Short forms: "OK", "K", "👍", "Cheers", "Ta", "Much appreciated"
    - Closings: "Great, thanks!" followed by signature
+   - FYI/Informational notices: Policy updates, announcements, general notices
+   - One-way communications: "Please be advised...", "For your information...", "Notice:"
+   - Statements that don't ask anything: Customer sharing their internal policies, late fees, etc.
 
    Set to TRUE (response needed) when:
-   - Follow-up expected: "Thanks, we'll review and get back to you"
-   - Has substantial content: "Thank you, please find attached our PO"
-   - Contains question: "Got it. When can you ship?"
-   - Makes a request: "Thanks! Also, can you expedite this?"
+   - Contains a direct question: "When can you ship?", "Do you have stock?"
+   - Makes a specific request: "Please send quote", "Can you expedite?"
+   - Expects follow-up: "We'll need confirmation by Friday"
+   - Has substantial actionable content: "Please find attached our PO"
 
 6. RELATED_TO - If this thread is clearly a RESPONSE to another thread (e.g., a vendor quote/estimate that responds to our RFQ), provide the INDEX of that related thread. Look for:
    - Quotes/Estimates that respond to RFQs we sent (same vendor, matching part numbers, timing)
@@ -285,17 +287,19 @@ Analyze this thread and provide:
 4. SUMMARY - A 1-2 sentence summary of the thread's key content/status
 
 5. NEEDS_RESPONSE - Does the LAST email in this thread require a response from us?
-   Set to FALSE (no response needed) for simple acknowledgments:
-   - Standard: "Thanks!", "Thank you!", "Got it!", "Perfect!", "Received!"
-   - Natural variations: "That works!", "Sounds good!", "Confirmed!", "Noted with thanks!"
+   Set to FALSE (no response needed) for:
+   - Simple acknowledgments: "Thanks!", "Got it!", "Perfect!", "Sounds good!", "Confirmed!"
    - Short forms: "OK", "K", "👍", "Cheers", "Ta", "Much appreciated"
    - Closings: "Great, thanks!" followed by signature
+   - FYI/Informational notices: Policy updates, announcements, general notices
+   - One-way communications: "Please be advised...", "For your information...", "Notice:"
+   - Statements that don't ask anything: Customer sharing their internal policies, late fees, etc.
 
    Set to TRUE (response needed) when:
-   - Follow-up expected: "Thanks, we'll review and get back to you"
-   - Has substantial content: "Thank you, please find attached our PO"
-   - Contains question: "Got it. When can you ship?"
-   - Makes a request: "Thanks! Also, can you expedite this?"
+   - Contains a direct question: "When can you ship?", "Do you have stock?"
+   - Makes a specific request: "Please send quote", "Can you expedite?"
+   - Expects follow-up: "We'll need confirmation by Friday"
+   - Has substantial actionable content: "Please find attached our PO"
 
 Respond with JSON only, no markdown:
 {"category": "customer|vendor|other", "item_type": "po_received|po_sent|quote_request|general|other", "contact_name": "name or null", "summary": "brief summary", "needs_response": true|false}`;
