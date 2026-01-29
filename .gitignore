@@ -9,6 +9,9 @@ out
 # Database
 data/
 
+# Logs
+logs/
+
 # Drizzle
 drizzle/
 

@@ -215,23 +215,29 @@ const transporter = nodemailer.createTransport({
 ```
 
 **Label colors:**
-- PO Received/Sent: green (#059669)
+- PO Received: green (#059669)
+- PO Sent: purple (#7c3aed)
 - RFQ: blue (#2563eb)
 - General: gray (#6b7280)
 - Need to Ack PO: red (#dc2626)
 - Need to Send Quote / Need to Reply: orange (#d97706)
 
-### Batch AI Categorization
+### AI Classification
 
-Thread categorization uses batch API calls for efficiency:
-- Up to 20 threads per API call (vs 1 call per thread)
-- Truncates email bodies to 500 chars in batch mode (vs 1500 for single)
-- Falls back to individual calls if batch fails
+Thread categorization uses **Sonnet only** for reliable business email classification:
+- Simplified business-context prompt (~40 lines vs 100+ previously)
+- Body truncation: 800 chars in batch mode, 1500 for single
+- Up to 20 threads per API call, falls back to individual calls if batch fails
 - See `src/report/summarizer.ts` → `categorizeThreadsBatch()`
 
 AI returns additional fields for each thread:
 - **needsResponse**: `false` if last email is "thanks", "sounds good", etc.
 - **relatedTo**: threadKey if this thread responds to another (e.g., vendor quote responding to our RFQ)
+
+Post-AI processing uses only **definitional constraints** (not pattern heuristics):
+- `po_received` → must be `customer` (they sent us PO)
+- `po_sent` → must be `vendor` (we sent them PO)
+- `quote_request` from us → must be `vendor` (we're buying)
 
 ### Thread Grouping
 

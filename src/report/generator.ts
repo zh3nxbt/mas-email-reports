@@ -245,12 +245,19 @@ export async function generateDailySummary(options: ReportOptions = {}): Promise
   const newTodosRaw = identifyTodos(threads);
   console.log(`  Found ${newTodosRaw.length} new action items`);
 
-  // Filter out new todos that are duplicates of morning todos (by threadKey)
-  const morningThreadKeys = new Set(morningTodosWithStatus.map(t => t.threadKey));
-
-  // Also filter out manually dismissed threads (persists across report regeneration)
+  // Get manually dismissed threads (persists across report regeneration)
   const dismissedThreadKeys = await getDismissedThreadKeys();
   console.log(`  ${dismissedThreadKeys.size} threads previously dismissed`);
+
+  // Filter out dismissed threads from carried-over morning todos
+  const dismissedFromMorning = morningTodosWithStatus.filter(t => dismissedThreadKeys.has(t.threadKey));
+  if (dismissedFromMorning.length > 0) {
+    console.log(`  Removing ${dismissedFromMorning.length} dismissed todos from morning carry-over`);
+    morningTodosWithStatus = morningTodosWithStatus.filter(t => !dismissedThreadKeys.has(t.threadKey));
+  }
+
+  // Filter out new todos that are duplicates of morning todos (by threadKey)
+  const morningThreadKeys = new Set(morningTodosWithStatus.map(t => t.threadKey));
 
   const trulyNewTodos = newTodosRaw.filter(t =>
     !morningThreadKeys.has(t.threadKey) && !dismissedThreadKeys.has(t.threadKey)
@@ -370,12 +377,19 @@ export async function generateMorningReminder(options: ReportOptions = {}): Prom
   console.log("\nStep 3: Identifying new action items from overnight emails...");
   const overnightTodosRaw = identifyTodos(overnightEmails);
 
-  // Filter out duplicates (already in pending todos from yesterday)
-  const pendingThreadKeys = new Set(pendingTodos.map(t => t.threadKey));
-
-  // Also filter out manually dismissed threads (persists across report regeneration)
+  // Get manually dismissed threads (persists across report regeneration)
   const dismissedThreadKeys = await getDismissedThreadKeys();
   console.log(`  ${dismissedThreadKeys.size} threads previously dismissed`);
+
+  // Filter out dismissed threads from carried-over pending todos
+  const dismissedFromPending = pendingTodos.filter(t => dismissedThreadKeys.has(t.threadKey));
+  if (dismissedFromPending.length > 0) {
+    console.log(`  Removing ${dismissedFromPending.length} dismissed todos from pending list`);
+    pendingTodos = pendingTodos.filter(t => !dismissedThreadKeys.has(t.threadKey));
+  }
+
+  // Filter out duplicates (already in pending todos from yesterday)
+  const pendingThreadKeys = new Set(pendingTodos.map(t => t.threadKey));
 
   const newOvernightTodos = overnightTodosRaw.filter(t =>
     !pendingThreadKeys.has(t.threadKey) && !dismissedThreadKeys.has(t.threadKey)
@@ -596,6 +610,24 @@ export async function runMorningReminder(options: ReportOptions = {}): Promise<v
       reportHtml: html,
     })
     .returning({ id: schema.dailyReports.id });
+
+  // Save overnight threads
+  for (const thread of data.overnightEmails) {
+    await db.insert(schema.reportThreads).values({
+      reportId: inserted.id,
+      threadKey: thread.threadKey,
+      category: thread.category,
+      itemType: thread.itemType,
+      contactEmail: thread.contactEmail,
+      contactName: thread.contactName,
+      subject: thread.subject,
+      summary: thread.summary,
+      emailCount: thread.emailCount,
+      lastEmailDate: thread.lastEmailDate,
+      lastEmailFromUs: thread.lastEmailFromUs,
+      poDetails: thread.poDetails,
+    });
+  }
 
   // Save todos that are still pending (for 4pm report to pick up)
   for (const todo of data.pendingTodos.filter(t => !t.resolved)) {

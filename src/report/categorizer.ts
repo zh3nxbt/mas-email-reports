@@ -1,7 +1,7 @@
 import { db, schema } from "@/db";
 import { and, gte, lte } from "drizzle-orm";
 import type { Email, Category, ItemType } from "@/db/schema";
-import { groupEmailsIntoThreads, normalizeSubject } from "@/sync/threader";
+import { groupEmailsIntoThreads, normalizeSubject, fetchFullThreadEmails } from "@/sync/threader";
 import type { CategorizedThread, TimeWindow, EmailForPrompt } from "./types";
 import { categorizeThreadWithAI, categorizeThreadsBatch, type ThreadForBatch } from "./summarizer";
 
@@ -93,10 +93,11 @@ export function getExternalContact(emails: Email[]): { email: string | null; nam
 }
 
 // Determine initial category based on first email direction and content
+// With full thread context, this is just a hint - the AI will make the final decision
 export function determineInitialCategory(emails: Email[]): Category {
   if (emails.length === 0) return "other";
 
-  // Sort by date to get first email
+  // Sort by date to get first email (oldest)
   const sorted = [...emails].sort((a, b) => {
     const dateA = a.date?.getTime() || 0;
     const dateB = b.date?.getTime() || 0;
@@ -110,26 +111,14 @@ export function determineInitialCategory(emails: Email[]): Category {
     return "other";
   }
 
-  const subject = (firstEmail.subject || "").toLowerCase();
-
-  // If we SENT the first email, check what kind it is:
+  // Simple heuristic: first email direction suggests category
+  // But the AI will have full context to make the final decision
   if (isOutbound(firstEmail)) {
-    // Invoices, quotations, quotes, estimates sent BY US = Customer interaction
-    // (We're billing them or providing a quote they requested)
-    if (
-      subject.includes("invoice") ||
-      subject.includes("quotation") ||
-      subject.includes("quote") ||
-      subject.includes("estimate") ||
-      subject.includes("est_") ||
-      subject.includes("inv_")
-    ) {
-      return "customer";
-    }
-    // PO, RFQ, or general inquiry sent BY US = Vendor interaction (we're buying)
+    // We sent first - could be vendor (PO/RFQ) or customer (invoice/quote)
+    // Default to "vendor" as a hint, AI will correct if it's an invoice/quote
     return "vendor";
   } else {
-    // They sent first = Customer interaction (they're reaching out to us)
+    // They sent first - typically a customer reaching out
     return "customer";
   }
 }
@@ -204,22 +193,31 @@ export function prepareEmailsForPrompt(emails: Email[]): EmailForPrompt[] {
 // Categorize all threads in a time window
 export async function categorizeThreads(window: TimeWindow): Promise<CategorizedThread[]> {
   // Fetch emails in window
-  const emails = await fetchEmailsInWindow(window);
-  console.log(`Found ${emails.length} emails in window`);
+  const windowEmails = await fetchEmailsInWindow(window);
+  console.log(`Found ${windowEmails.length} emails in window`);
 
-  // Group into threads
-  const threadMap = groupEmailsIntoThreads(emails);
-  console.log(`Grouped into ${threadMap.size} threads`);
+  // Track which email IDs are in the window (for filtering display later)
+  const windowEmailIds = new Set(windowEmails.map(e => e.id));
+
+  // Expand to full thread history for better AI context
+  // Pass window.end as cutoff to exclude future emails (important for historical reports)
+  const allEmails = await fetchFullThreadEmails(windowEmails, window.end);
+
+  // Group ALL emails into threads (gives AI full context)
+  const threadMap = groupEmailsIntoThreads(allEmails);
+  console.log(`Grouped into ${threadMap.size} threads (with full history)`);
 
   // Prepare thread data for batch processing
   interface ThreadData {
     threadKey: string;
-    threadEmails: Email[];
+    threadEmails: Email[];      // Full thread history (for AI context)
+    windowEmails: Email[];      // Only emails in the time window (for display)
     initialCategory: Category;
     contact: { email: string | null; name: string | null };
     emailsForPrompt: EmailForPrompt[];
     lastEmailFromUs: boolean;
     lastEmailDate: Date | null;
+    isNewThread: boolean;       // True if first email of thread is within the window
   }
 
   const threadsData: ThreadData[] = [];
@@ -227,20 +225,33 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
   for (const [threadKey, threadEmails] of threadMap) {
     if (threadEmails.length === 0) continue;
 
+    // Filter to only emails in the time window for display
+    const windowEmailsInThread = threadEmails.filter(e => windowEmailIds.has(e.id));
+
+    // Skip threads with no emails in the window (purely historical)
+    if (windowEmailsInThread.length === 0) continue;
+
+    // Use FULL thread for AI context (oldest first determines who initiated)
     const initialCategory = determineInitialCategory(threadEmails);
     const contact = getExternalContact(threadEmails);
     const emailsForPrompt = prepareEmailsForPrompt(threadEmails);
     const lastEmailFromUs = isLastEmailFromUs(threadEmails);
     const lastEmailDate = getLastEmailDate(threadEmails);
 
+    // Check if thread is NEW (first email is within the window)
+    const firstEmailDate = threadEmails[0]?.date;
+    const isNewThread = firstEmailDate ? (firstEmailDate >= window.start && firstEmailDate <= window.end) : false;
+
     threadsData.push({
       threadKey,
-      threadEmails,
+      threadEmails,      // Full history for AI
+      windowEmails: windowEmailsInThread,  // Window only for display
       initialCategory,
       contact,
       emailsForPrompt,
       lastEmailFromUs,
       lastEmailDate,
+      isNewThread,
     });
   }
 
@@ -273,11 +284,14 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
       continue;
     }
 
+    // First email in full thread history (oldest) - used for category decisions
     const firstEmail = data.threadEmails[0];
     const aiResult = aiResults.get(data.threadKey);
 
-    // Collect all emails including from merged threads
+    // Collect all FULL HISTORY emails including from merged threads (for AI decisions)
     let allEmails = [...data.threadEmails];
+    // Collect all WINDOW emails including from merged threads (for display)
+    let displayEmails = [...data.windowEmails];
     let mergedCount = 0;
 
     for (const [mergedKey, targetKey] of mergedInto) {
@@ -285,6 +299,7 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
         const mergedData = dataByKey.get(mergedKey);
         if (mergedData) {
           allEmails.push(...mergedData.threadEmails);
+          displayEmails.push(...mergedData.windowEmails);
           mergedCount++;
         }
       }
@@ -296,8 +311,13 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
       const dateB = b.date?.getTime() || 0;
       return dateA - dateB;
     });
+    displayEmails.sort((a, b) => {
+      const dateA = a.date?.getTime() || 0;
+      const dateB = b.date?.getTime() || 0;
+      return dateA - dateB;
+    });
 
-    // Recalculate last email info after merge
+    // Recalculate last email info based on FULL thread (not just window)
     const lastEmail = allEmails[allEmails.length - 1];
     const lastEmailFromUs = isOutbound(lastEmail);
     const lastEmailDate = lastEmail?.date || null;
@@ -320,91 +340,49 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
       }
     }
 
-    // Determine item type - use AI result but apply safety nets for obvious patterns
+    // Use AI results
     let itemType = aiResult?.itemType ?? "general";
-    const subjectLower = (firstEmail.subject || "").toLowerCase();
-    const category = aiResult?.category ?? data.initialCategory;
+    let category = aiResult?.category ?? data.initialCategory;
 
-    // PO safety net: If it's a customer thread and subject clearly indicates a PO
-    if (category === "customer" && itemType === "general") {
-      const poPatterns = [
-        /\bpo\s*#?\d+/i,           // "PO 12345", "PO#12345", "PO12345"
-        /purchase\s*order/i,       // "Purchase Order"
-        /\bpo\s+attached/i,        // "PO attached"
-        /\bpo\s+number/i,          // "PO number"
-        /please\s+proceed\s+with.*order/i,  // "Please proceed with the order"
-        /go\s+ahead\s+with.*quote/i,        // "Go ahead with quote #X"
-        /placing\s+an?\s+order/i,           // "Placing an order"
-      ];
-
-      if (poPatterns.some(p => p.test(subjectLower))) {
-        console.warn(`Safety net: PO pattern in "${firstEmail.subject}" but AI said general`);
-        itemType = "po_received";
-      }
+    // Definitional constraints only - these are logical, not heuristic
+    // If someone sent us a PO, they're a customer by definition
+    if (itemType === "po_received" && category !== "customer") {
+      console.warn(`Category fix: po_received must be customer, not ${category} ("${firstEmail.subject}")`);
+      category = "customer";
     }
-
-    // RFQ safety net: If it's a customer thread and subject indicates a quote request
-    if (category === "customer" && itemType === "general") {
-      const rfqPatterns = [
-        /\brfq\b/i,                    // "RFQ"
-        /request\s+for\s+quot/i,       // "Request for quote/quotation"
-        /please\s+quote/i,             // "Please quote"
-        /quote\s+request/i,            // "Quote request"
-        /pricing\s+request/i,          // "Pricing request"
-        /need\s+a\s+quote/i,           // "Need a quote"
-        /send\s+(us\s+)?a\s+quote/i,   // "Send us a quote"
-      ];
-
-      if (rfqPatterns.some(p => p.test(subjectLower))) {
-        console.warn(`Safety net: RFQ pattern in "${firstEmail.subject}" but AI said general`);
-        itemType = "quote_request";
-      }
+    // If we sent a PO to them, they're a vendor by definition
+    if (itemType === "po_sent" && category !== "vendor") {
+      console.warn(`Category fix: po_sent must be vendor, not ${category} ("${firstEmail.subject}")`);
+      category = "vendor";
     }
-
-    // Quotation safety net: If we sent a quotation/quote/estimate, it implies an RFQ
-    // (customer may have called or asked in person - no email trace of the request)
-    if (category === "customer" && itemType === "general") {
-      const quotationPatterns = [
-        /^quotation\b/i,               // "Quotation 2065"
-        /^quote\s*#?\d*/i,             // "Quote #123" or "Quote 123"
-        /^estimate\s*#?\d*/i,          // "Estimate #123"
-        /\bquotation\s*#?\d+/i,        // "Quotation #2065"
-        /\best[_\s]*\d+/i,             // "Est_123" or "Est 123"
-      ];
-
-      if (quotationPatterns.some(p => p.test(subjectLower))) {
-        console.warn(`Safety net: Quotation pattern in "${firstEmail.subject}" - treating as RFQ`);
-        itemType = "quote_request";
-      }
-    }
+    // NOTE: We intentionally do NOT force quote_request → vendor.
+    // The AI now correctly distinguishes:
+    // - Customer asking US for quote → customer + quote_request
+    // - WE asking vendor for quote → vendor + general (not quote_request)
 
     // Determine if response is needed:
-    // - Not needed if last email is from us
-    // - POs and RFQs ALWAYS need a response (override AI)
-    // - Otherwise trust AI's assessment
-    let needsResponse = !lastEmailFromUs && (aiResult?.needsResponse ?? true);
-
-    // Safety net: POs and RFQs always need acknowledgment, regardless of AI assessment
-    if (!lastEmailFromUs && (itemType === "po_received" || itemType === "quote_request")) {
-      if (!needsResponse) {
-        console.warn(`Safety net: ${itemType} "${firstEmail.subject}" - forcing needsResponse=true`);
-      }
-      needsResponse = true;
-    }
+    // - Not needed if last email is from us (we already replied)
+    // - Otherwise trust AI's assessment (it has full thread context)
+    //
+    // NOTE: We intentionally do NOT override needsResponse for POs/RFQs.
+    // The AI can detect when customer's last email is just "thanks" or acknowledgment.
+    // Forcing needsResponse=true would create false action items.
+    const needsResponse = !lastEmailFromUs && (aiResult?.needsResponse ?? true);
 
     categorizedThreads.push({
       threadKey: data.threadKey,
-      emails: allEmails,
+      emails: displayEmails,  // Only window emails for display
       category,
       itemType,
       contactEmail: data.contact.email,
       contactName: aiResult?.contactName ?? data.contact.name,
       subject: firstEmail.subject || "(no subject)",
       summary,
-      emailCount: allEmails.length,
+      emailCount: displayEmails.length,  // Count of window emails
       lastEmailDate,
       lastEmailFromUs,
       needsResponse,
+      isNewThread: data.isNewThread,
       poDetails: null,
     });
   }

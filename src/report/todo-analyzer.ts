@@ -16,8 +16,13 @@ export function identifyTodos(threads: CategorizedThread[]): IdentifiedTodo[] {
       continue;
     }
 
-    // If AI determined no response is needed (e.g., "thanks" message), skip
-    if (!thread.needsResponse) {
+    // For PO_RECEIVED and QUOTE_REQUEST, we ALWAYS need to respond
+    // These are business-critical - don't let AI's needsResponse override
+    const alwaysNeedsResponse = thread.itemType === "po_received" || thread.itemType === "quote_request";
+
+    // For general/other threads, trust AI's judgment on needsResponse
+    // (e.g., AI returns false for "thanks!" messages)
+    if (!alwaysNeedsResponse && !thread.needsResponse) {
       continue;
     }
 

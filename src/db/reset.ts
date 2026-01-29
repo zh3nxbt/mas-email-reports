@@ -17,6 +17,9 @@ async function reset() {
   await db.delete(schema.emails);
   console.log("  - Cleared emails");
 
+  await db.delete(schema.syncMetadata);
+  console.log("  - Cleared sync_metadata");
+
   console.log("Done! Run 'npm run sync' to re-sync emails.");
   process.exit(0);
 }

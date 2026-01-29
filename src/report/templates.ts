@@ -80,6 +80,7 @@ const styles = `
     padding-top: 2px;
   }
   .thread-label.po { color: #059669; }
+  .thread-label.po-sent { color: #7c3aed; }
   .thread-label.rfq { color: #2563eb; }
   .thread-content {
     flex: 1;
@@ -219,7 +220,7 @@ function getThreadLabel(itemType: string): { text: string; class: string; color:
     case "po_received":
       return { text: "PO Received", class: "po", color: "#059669" }; // green
     case "po_sent":
-      return { text: "PO Sent", class: "po", color: "#059669" }; // green
+      return { text: "PO Sent", class: "po-sent", color: "#7c3aed" }; // purple
     case "quote_request":
       return { text: "RFQ", class: "rfq", color: "#2563eb" }; // blue
     default:
@@ -227,15 +228,40 @@ function getThreadLabel(itemType: string): { text: string; class: string; color:
   }
 }
 
+function formatTimestamp(date: Date | null): string {
+  if (!date) return "";
+  return date.toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function getLatestEmailDate(thread: CategorizedThread): Date | null {
+  if (!thread.emails || thread.emails.length === 0) return null;
+  let latest: Date | null = null;
+  for (const email of thread.emails) {
+    if (email.date && (!latest || email.date > latest)) {
+      latest = email.date;
+    }
+  }
+  return latest;
+}
+
 function renderThread(thread: CategorizedThread): string {
   const label = getThreadLabel(thread.itemType);
+  const latestDate = getLatestEmailDate(thread);
+  const timestamp = formatTimestamp(latestDate);
 
   return `
     <div class="thread-item">
       <div class="thread-label ${label.class}" style="color: ${label.color};">${label.text}</div>
       <div class="thread-content">
         <div class="thread-subject">${escapeHtml(thread.subject)}<span class="email-count">${thread.emailCount}</span></div>
-        <div class="thread-from">${escapeHtml(thread.contactName || thread.contactEmail || "Unknown")}</div>
+        <div class="thread-from">${escapeHtml(thread.contactName || thread.contactEmail || "Unknown")}${timestamp ? ` <span style="color: #9ca3af; font-size: 12px;">· ${timestamp}</span>` : ""}</div>
         ${thread.summary ? `<div class="thread-summary">${escapeHtml(thread.summary)}</div>` : ""}
       </div>
     </div>
@@ -260,6 +286,7 @@ function renderDisplayTodo(todo: DisplayTodo): string {
   const priority = getTodoPriority(todo.todoType, age);
   const label = getTodoLabel(todo.todoType);
   const labelColor = label.class === "urgent" ? "#dc2626" : "#d97706";
+  const timestamp = formatTimestamp(todo.originalDate);
 
   return `
     <div class="todo-item ${todo.resolved ? "todo-resolved" : ""}" data-thread-key="${escapeHtml(todo.threadKey)}">
@@ -275,7 +302,7 @@ function renderDisplayTodo(todo: DisplayTodo): string {
             : `<button class="todo-complete-btn" data-thread-key="${escapeHtml(todo.threadKey)}">Mark Complete</button>`
           }
         </div>
-        <div class="todo-from">${escapeHtml(todo.contactName || todo.contactEmail || "Unknown")}</div>
+        <div class="todo-from">${escapeHtml(todo.contactName || todo.contactEmail || "Unknown")}${timestamp ? ` · ${timestamp}` : ""}</div>
         ${todo.description ? `<div class="todo-summary">${escapeHtml(todo.description)}</div>` : ""}
       </div>
     </div>
@@ -332,10 +359,41 @@ export function generateDailySummaryHtml(
     day: "numeric",
   });
 
-  const customerThreads = threads.filter((t) => t.category === "customer");
-  const vendorThreads = threads.filter((t) => t.category === "vendor");
+  // Filter threads: only show NEW threads or threads needing action
+  // Old threads where we just replied get moved to "ignored"
+  const shouldShowThread = (t: CategorizedThread) => t.isNewThread || t.needsResponse;
 
-  const pendingTodos = todos.filter((t) => !t.resolved);
+  const customerThreads = threads.filter((t) => t.category === "customer" && shouldShowThread(t));
+  const vendorThreads = threads.filter((t) => t.category === "vendor" && shouldShowThread(t));
+  const otherThreads = threads.filter((t) => t.category === "other");
+
+  // Threads that are old and handled (no action needed) - add to ignored
+  const handledThreads = threads.filter((t) =>
+    (t.category === "customer" || t.category === "vendor") && !shouldShowThread(t)
+  );
+
+  // Sort todos: pending first (oldest first), then resolved (oldest first)
+  const sortedTodos = [...todos].sort((a, b) => {
+    // First by resolved status (pending first)
+    if (a.resolved !== b.resolved) {
+      return a.resolved ? 1 : -1;
+    }
+    // Then by date (oldest first)
+    const dateA = a.originalDate?.getTime() ?? 0;
+    const dateB = b.originalDate?.getTime() ?? 0;
+    return dateA - dateB;
+  });
+
+  // Combine "other" category and "handled old threads" into ignored
+  const allIgnored = [...otherThreads, ...handledThreads];
+  const ignoredNote = allIgnored.length > 0
+    ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
+        <strong>Ignored:</strong>
+        <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+          ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
+        </ul>
+      </div>`
+    : "";
 
   return `
 <!DOCTYPE html>
@@ -353,10 +411,10 @@ export function generateDailySummaryHtml(
       ${received} received, ${sent} sent
     </div>
 
-    ${pendingTodos.length > 0 ? `
+    ${sortedTodos.length > 0 ? `
     <div class="section-action-items">
       <h2>Action Items</h2>
-      ${todos.map(renderDisplayTodo).join("")}
+      ${sortedTodos.map(renderDisplayTodo).join("")}
     </div>
     ` : ""}
 
@@ -364,6 +422,8 @@ export function generateDailySummaryHtml(
       ${renderThreadSection("Customers", customerThreads)}
       ${renderThreadSection("Vendors", vendorThreads)}
     </div>
+
+    ${ignoredNote}
 
     <div class="footer">
       ${received} received, ${sent} sent
@@ -433,15 +493,44 @@ export function generateMorningReminderHtml(data: MorningReportData, reportDate:
     </div>
     `}
 
-    ${data.overnightEmails.length > 0 ? `
-    <div class="section">
-      <h2>Overnight</h2>
-      ${data.overnightEmails.slice(0, 10).map(renderThread).join("")}
-      ${data.overnightEmails.length > 10 ? `
-        <div class="empty-state">+${data.overnightEmails.length - 10} more</div>
-      ` : ""}
-    </div>
-    ` : ""}
+    ${(() => {
+      // Filter threads: only show NEW threads or threads needing action
+      const shouldShow = (t: CategorizedThread) => t.isNewThread || t.needsResponse;
+
+      const overnightCustomers = data.overnightEmails.filter(t => t.category === "customer" && shouldShow(t));
+      const overnightVendors = data.overnightEmails.filter(t => t.category === "vendor" && shouldShow(t));
+      const overnightOther = data.overnightEmails.filter(t => t.category === "other");
+      const overnightHandled = data.overnightEmails.filter(t =>
+        (t.category === "customer" || t.category === "vendor") && !shouldShow(t)
+      );
+
+      if (data.overnightEmails.length === 0) return "";
+
+      const allIgnored = [...overnightOther, ...overnightHandled];
+      const ignoredNote = allIgnored.length > 0
+        ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
+            <strong>Ignored:</strong>
+            <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+              ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
+            </ul>
+          </div>`
+        : "";
+
+      return `
+      <div class="section">
+        <h2>Overnight</h2>
+        ${overnightCustomers.length > 0 ? `
+          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Customers</h3>
+          ${sortThreadsByItemType(overnightCustomers).map(renderThread).join("")}
+        ` : ""}
+        ${overnightVendors.length > 0 ? `
+          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Vendors</h3>
+          ${sortThreadsByItemType(overnightVendors).map(renderThread).join("")}
+        ` : ""}
+        ${ignoredNote}
+      </div>
+      `;
+    })()}
 
     <div class="footer">
       ${data.overnightReceived} received, ${data.overnightSent} sent overnight
@@ -468,23 +557,44 @@ export function generatePlainTextSummary(
     day: "numeric",
   });
 
-  const pendingTodos = todos.filter((t) => !t.resolved);
-
   lines.push(`\n${dateStr}`);
   lines.push(`${received} received, ${sent} sent\n`);
 
-  if (pendingTodos.length > 0) {
+  // Show all todos: pending first (oldest first), then resolved (oldest first)
+  const sortedTodos = [...todos].sort((a, b) => {
+    if (a.resolved !== b.resolved) {
+      return a.resolved ? 1 : -1;
+    }
+    const dateA = a.originalDate?.getTime() ?? 0;
+    const dateB = b.originalDate?.getTime() ?? 0;
+    return dateA - dateB;
+  });
+
+  if (sortedTodos.length > 0) {
     lines.push(`ACTION ITEMS:`);
-    for (const todo of todos) {
-      const status = todo.resolved ? "[x]" : "[ ]";
-      lines.push(`  ${status} ${todo.subject}`);
-      lines.push(`      ${todo.contactName || todo.contactEmail || "Unknown"}`);
+    for (const todo of sortedTodos) {
+      const marker = todo.resolved ? "[x]" : "[ ]";
+      const timestamp = todo.originalDate ? todo.originalDate.toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }) : "";
+      lines.push(`  ${marker} ${todo.subject}`);
+      lines.push(`      ${todo.contactName || todo.contactEmail || "Unknown"}${timestamp ? ` · ${timestamp}` : ""}`);
     }
     lines.push("");
   }
 
-  const customerThreads = threads.filter((t) => t.category === "customer");
-  const vendorThreads = threads.filter((t) => t.category === "vendor");
+  // Filter threads: only show NEW threads or threads needing action
+  const shouldShowThread = (t: CategorizedThread) => t.isNewThread || t.needsResponse;
+
+  const customerThreads = threads.filter((t) => t.category === "customer" && shouldShowThread(t));
+  const vendorThreads = threads.filter((t) => t.category === "vendor" && shouldShowThread(t));
+  const ignoredThreads = threads.filter((t) =>
+    t.category === "other" || ((t.category === "customer" || t.category === "vendor") && !shouldShowThread(t))
+  );
 
   if (customerThreads.length > 0) {
     lines.push(`CUSTOMERS:`);
@@ -502,6 +612,14 @@ export function generatePlainTextSummary(
       lines.push(`  ${thread.subject}`);
       lines.push(`      ${thread.contactName || thread.contactEmail || "Unknown"}`);
       if (thread.summary) lines.push(`      ${thread.summary}`);
+    }
+    lines.push("");
+  }
+
+  if (ignoredThreads.length > 0) {
+    lines.push(`IGNORED:`);
+    for (const thread of ignoredThreads) {
+      lines.push(`  ${thread.subject}`);
     }
     lines.push("");
   }

@@ -4,9 +4,13 @@ import type { EmailForPrompt, CategorizationResult, PoExtractionResult, PoLineIt
 
 const anthropic = new Anthropic();
 
+// Model - Sonnet only for reliable classification
+const MODEL_SONNET = "claude-sonnet-4-20250514";
+
 // Truncation limits
 const BODY_LIMIT_SINGLE = 1500;
-const BODY_LIMIT_BATCH = 500;
+const BODY_LIMIT_BATCH = 800;  // Increased from 300 for better context
+const MAX_EMAILS_PER_THREAD = 6;  // Keep first 2 + last 3, or all if <= 6
 
 function formatEmailForPrompt(email: EmailForPrompt, bodyLimit: number = BODY_LIMIT_SINGLE): string {
   const direction = email.isOutbound ? "[SENT]" : "[RECEIVED]";
@@ -21,6 +25,39 @@ ${email.body.slice(0, bodyLimit)}${email.body.length > bodyLimit ? "..." : ""}
 `;
 }
 
+// Truncate long threads to keep first 2 + last 3 emails
+// This preserves: who initiated (first emails) and current state (last emails)
+function truncateThreadEmails(emails: EmailForPrompt[]): EmailForPrompt[] {
+  if (emails.length <= MAX_EMAILS_PER_THREAD) {
+    return emails;
+  }
+
+  // Sort by date (should already be sorted, but ensure it)
+  const sorted = [...emails].sort((a, b) => {
+    const dateA = a.date ? new Date(a.date).getTime() : 0;
+    const dateB = b.date ? new Date(b.date).getTime() : 0;
+    return dateA - dateB;
+  });
+
+  // Keep first 2 and last 3
+  const first = sorted.slice(0, 2);
+  const last = sorted.slice(-3);
+  const omittedCount = sorted.length - 5;
+
+  // Create a placeholder email to indicate omission
+  const placeholder: EmailForPrompt = {
+    from: "---",
+    to: "---",
+    date: null,
+    subject: `[... ${omittedCount} emails omitted for brevity ...]`,
+    body: "",
+    isOutbound: false,
+    hasAttachments: false,
+  };
+
+  return [...first, placeholder, ...last];
+}
+
 // Input for batch categorization
 export interface ThreadForBatch {
   threadKey: string;
@@ -33,16 +70,16 @@ export interface BatchCategorizationResult {
   [threadKey: string]: CategorizationResult;
 }
 
-// Categorize multiple threads in a single API call
-export async function categorizeThreadsBatch(
-  threads: ThreadForBatch[]
+// Internal function to categorize a batch with a specific model
+async function categorizeWithModel(
+  threads: ThreadForBatch[],
+  model: string
 ): Promise<BatchCategorizationResult> {
   if (threads.length === 0) {
     return {};
   }
 
   // Format threads as JSON for the prompt - use indices instead of threadKeys
-  // to avoid AI making mistakes with long message IDs
   const threadsJson = threads.map((thread, index) => {
     const sorted = [...thread.emails].sort((a, b) => {
       const dateA = a.date ? new Date(a.date).getTime() : 0;
@@ -50,10 +87,13 @@ export async function categorizeThreadsBatch(
       return dateA - dateB;
     });
 
+    const truncated = truncateThreadEmails(sorted);
+
     return {
-      index, // Use simple numeric index instead of complex threadKey
+      index,
       initialCategory: thread.initialCategory,
-      emails: sorted.map((email) => ({
+      emailCount: sorted.length,
+      emails: truncated.map((email) => ({
         direction: email.isOutbound ? "SENT" : "RECEIVED",
         date: email.date ? email.date.toISOString().split("T")[0] : "unknown",
         from: email.from,
@@ -65,80 +105,62 @@ export async function categorizeThreadsBatch(
     };
   });
 
-  const prompt = `You are analyzing multiple email threads for MAS Precision Parts, a precision parts manufacturing company.
+  const prompt = `You are classifying email threads for MAS Precision Parts, a precision manufacturing company.
 
-CONTEXT:
-- Emails with direction "SENT" are FROM us (MAS Precision Parts)
-- Emails with direction "RECEIVED" are TO us (from external parties)
-- Each thread has an "index" number and an initialCategory guess based on first email direction
+ABOUT US:
+- We are MAS Precision Parts (sales@masprecisionparts.com)
+- We manufacture precision parts for CUSTOMERS (they buy from us)
+- We purchase materials/equipment from VENDORS (we buy from them)
+- SENT emails are from us, RECEIVED emails are from external parties
 
-INPUT THREADS:
+CRITICAL RULES - APPLY THESE FIRST:
+1. If WE send an Invoice → ALWAYS "customer" (we bill customers, never vendors)
+2. If WE send a Quotation/Quote/Estimate → ALWAYS "customer" (we quote customers, never vendors)
+3. If subject contains "RFQ" or "Request for Quotation" and THEY ask US for pricing → "customer" + "quote_request"
+4. If WE send a PO to them → ALWAYS "vendor" (we buy from vendors)
+
+CLASSIFICATION:
+1. CATEGORY - Who is the external party?
+   - "customer": Someone we sell to or provide quotes to
+     * They send us a PO or RFQ (buying from us)
+     * We send them an invoice, quotation, or estimate (billing/quoting them)
+     * They ask US for pricing or quotes
+   - "vendor": Someone we buy from
+     * We send them a PO or RFQ (we're purchasing)
+     * They send us quotes/pricing IN RESPONSE to our RFQ (we're the buyer)
+     * Equipment/material suppliers reaching out to sell to us
+   - "other": Automated emails, newsletters, spam, internal
+
+2. ITEM_TYPE - What kind of interaction?
+   - "po_received": Customer sent us a purchase order
+   - "po_sent": We sent a PO to vendor
+   - "quote_request": Customer asking US for a quote/pricing (NOT when we ask vendors)
+   - "general": General correspondence
+   - "other": Automated/newsletters
+
+3. NEEDS_RESPONSE - Does the LAST email need our reply?
+   Set FALSE for:
+   - Acknowledgments ("Thanks!", "Got it!", "Received!")
+   - FYI notices, policy statements, announcements
+   - Emails with "notice" in subject (price notices, policy notices, etc.)
+   - Informational emails that don't ask a question or request action
+   Set TRUE for: questions, requests, substantive content requiring action
+   IMPORTANT: "Notice" emails should be FALSE unless they explicitly ask for a reply
+
+4. CONTACT_NAME - External party's name/company
+
+5. SUMMARY - 1-2 sentence summary of thread status
+
+6. RELATED_TO - Index of related thread if this is a response (e.g., vendor quote responding to our RFQ)
+
+THREADS TO CLASSIFY:
 ${JSON.stringify(threadsJson, null, 2)}
 
-For EACH thread, determine:
-
-1. CATEGORY - Confirm or correct the category:
-   - "customer" = They are our customer. This includes:
-     * They sent us an inquiry, RFQ, or PO
-     * WE sent THEM an invoice, quotation, quote, or estimate (we're billing/quoting them)
-   - "vendor" = They are our vendor/supplier. This ONLY applies when:
-     * WE sent THEM a PO or RFQ (we're buying from them)
-     * They sent us a quote/estimate in response to our RFQ
-   - "other" = Newsletter, automated, internal, spam, or unrelated
-
-2. ITEM_TYPE - What kind of interaction:
-   - "po_received" = Customer sent us a purchase order
-   - "po_sent" = We sent a PO to a vendor (we're buying)
-   - "quote_request" = Customer asking us for a quote/pricing
-   - "general" = General inquiry, conversation, OR we sent invoice/quotation to customer
-   - "other" = Automated, newsletter, unrelated
-
-   PURCHASE ORDER DETECTION - Mark as "po_received" (customer) or "po_sent" (vendor) when you see:
-   - Explicit: "PO #12345", "Purchase Order", "PO attached", "PO number"
-   - Implicit orders: "Please proceed with the order", "Go ahead with quote #X", "We'd like to place an order"
-   - Regional variations: "Purchase requisition", "Blanket order", "Call-off order"
-   - PDF attachments named like: "PO_*.pdf", "Purchase*.pdf", "Order*.pdf"
-
-   QUOTE REQUEST DETECTION - Mark as "quote_request" when you see:
-   - Explicit: "RFQ", "Request for quote", "Please quote", "Quotation request"
-   - Implicit: "What would it cost...", "Can you provide pricing...", "How much for..."
-   - Capability inquiries: "Do you manufacture X?", "Can you make these parts?"
-
-   NOT a quote request (use "general" instead):
-   - Document requests: packing slip, shipping label, certificate, spec sheet, drawing
-   - Status inquiries: "Where is my order?", "When will it ship?"
-   - General follow-ups: "Did you receive our PO?", "Any updates?"
-
-3. CONTACT_NAME - The person/company name from the external party
-
-4. SUMMARY - A 1-2 sentence summary of the thread's key content/status
-
-5. NEEDS_RESPONSE - Does the LAST email in this thread require a response from us?
-   Set to FALSE (no response needed) for:
-   - Simple acknowledgments: "Thanks!", "Got it!", "Perfect!", "Sounds good!", "Confirmed!"
-   - Short forms: "OK", "K", "👍", "Cheers", "Ta", "Much appreciated"
-   - Closings: "Great, thanks!" followed by signature
-   - FYI/Informational notices: Policy updates, announcements, general notices
-   - One-way communications: "Please be advised...", "For your information...", "Notice:"
-   - Statements that don't ask anything: Customer sharing their internal policies, late fees, etc.
-
-   Set to TRUE (response needed) when:
-   - Contains a direct question: "When can you ship?", "Do you have stock?"
-   - Makes a specific request: "Please send quote", "Can you expedite?"
-   - Expects follow-up: "We'll need confirmation by Friday"
-   - Has substantial actionable content: "Please find attached our PO"
-
-6. RELATED_TO - If this thread is clearly a RESPONSE to another thread (e.g., a vendor quote/estimate that responds to our RFQ), provide the INDEX of that related thread. Look for:
-   - Quotes/Estimates that respond to RFQs we sent (same vendor, matching part numbers, timing)
-   - POs that follow quotes
-   - Use null if not related to another thread
-
-Respond with JSON only, no markdown. The response MUST include results for ALL ${threads.length} threads, using the same index numbers:
-{"results": [{"index": 0, "category": "customer|vendor|other", "item_type": "po_received|po_sent|quote_request|general|other", "contact_name": "name or null", "summary": "brief summary", "needs_response": true|false, "related_to": null}, ...]}`;
+Return JSON only: {"results": [{"index": 0, "category": "...", "item_type": "...", "contact_name": "...", "summary": "...", "needs_response": true/false, "related_to": null}, ...]}`;
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-3-5-haiku-latest",
+      model,
       max_tokens: 4000,
       system: "You are a JSON-only classifier. Always respond with valid JSON, no explanations. Process ALL threads provided.",
       messages: [
@@ -164,19 +186,15 @@ Respond with JSON only, no markdown. The response MUST include results for ALL $
       }>;
     };
 
-    // Validate and build result map
     const validCategories: Category[] = ["customer", "vendor", "other"];
     const validItemTypes: ItemType[] = ["po_sent", "po_received", "quote_request", "general", "other"];
 
     const resultMap: BatchCategorizationResult = {};
-
-    // Build a map from index to result
     const resultsByIndex = new Map<number, typeof parsed.results[0]>();
     for (const result of parsed.results) {
       resultsByIndex.set(result.index, result);
     }
 
-    // Map results back to threadKeys using index
     for (let i = 0; i < threads.length; i++) {
       const thread = threads[i];
       const result = resultsByIndex.get(i);
@@ -190,7 +208,6 @@ Respond with JSON only, no markdown. The response MUST include results for ALL $
           ? (result.item_type as ItemType)
           : "general";
 
-        // Convert related_to index back to threadKey
         let relatedTo: string | null = null;
         if (result.related_to !== null && result.related_to >= 0 && result.related_to < threads.length) {
           relatedTo = threads[result.related_to].threadKey;
@@ -201,7 +218,7 @@ Respond with JSON only, no markdown. The response MUST include results for ALL $
           itemType,
           contactName: result.contact_name,
           summary: result.summary,
-          needsResponse: result.needs_response !== false, // Default to true if not specified
+          needsResponse: result.needs_response !== false,
           relatedTo,
         };
       } else {
@@ -211,7 +228,7 @@ Respond with JSON only, no markdown. The response MUST include results for ALL $
           itemType: "general",
           contactName: null,
           summary: "Classification incomplete - needs review",
-          needsResponse: true, // Assume needs response if AI failed
+          needsResponse: true,
           relatedTo: null,
         };
       }
@@ -219,12 +236,42 @@ Respond with JSON only, no markdown. The response MUST include results for ALL $
 
     return resultMap;
   } catch (error) {
-    console.error("Batch categorization error:", error);
-    throw error; // Let caller handle fallback
+    console.error(`Batch categorization error (${model}):`, error);
+    throw error;
   }
 }
 
-// Categorize a thread using AI
+// Categorize multiple threads in a single API call using Sonnet
+export async function categorizeThreadsBatch(
+  threads: ThreadForBatch[]
+): Promise<BatchCategorizationResult> {
+  if (threads.length === 0) {
+    return {};
+  }
+
+  console.log(`  Using Sonnet for all ${threads.length} threads`);
+
+  try {
+    return await categorizeWithModel(threads, MODEL_SONNET);
+  } catch (error) {
+    console.error("Batch categorization failed:", error);
+    // Return defaults for all threads
+    const results: BatchCategorizationResult = {};
+    for (const thread of threads) {
+      results[thread.threadKey] = {
+        category: thread.initialCategory,
+        itemType: "general",
+        contactName: null,
+        summary: "Classification failed - needs review",
+        needsResponse: true,
+        relatedTo: null,
+      };
+    }
+    return results;
+  }
+}
+
+// Categorize a thread using AI (individual fallback - uses Sonnet for reliability)
 export async function categorizeThreadWithAI(
   emails: EmailForPrompt[],
   initialCategory: Category
@@ -238,75 +285,55 @@ export async function categorizeThreadWithAI(
 
   const threadFormatted = sorted.map(formatEmailForPrompt).join("\n---\n\n");
 
-  const prompt = `You are analyzing an email thread for MAS Precision Parts, a precision parts manufacturing company.
+  const prompt = `You are classifying an email thread for MAS Precision Parts, a precision manufacturing company.
 
-CONTEXT:
-- Emails marked [SENT] are FROM us (MAS Precision Parts)
-- Emails marked [RECEIVED] are TO us (from external parties)
-- Initial category guess: ${initialCategory} (based on first email direction)
+ABOUT US:
+- We are MAS Precision Parts (sales@masprecisionparts.com)
+- We manufacture precision parts for CUSTOMERS (they buy from us)
+- We purchase materials/equipment from VENDORS (we buy from them)
+- [SENT] emails are from us, [RECEIVED] emails are from external parties
 
-Thread (oldest first):
+CRITICAL RULES - APPLY THESE FIRST:
+1. If WE send an Invoice → ALWAYS "customer" (we bill customers, never vendors)
+2. If WE send a Quotation/Quote/Estimate → ALWAYS "customer" (we quote customers, never vendors)
+3. If subject contains "RFQ" or "Request for Quotation" and THEY ask US for pricing → "customer" + "quote_request"
+4. If WE send a PO to them → ALWAYS "vendor" (we buy from vendors)
+
+THREAD (oldest first):
 ${threadFormatted}
 
-Analyze this thread and provide:
+CLASSIFICATION:
+1. CATEGORY - Who is the external party?
+   - "customer": Someone we sell to or provide quotes to
+     * They send us a PO or RFQ (buying from us)
+     * We send them an invoice, quotation, or estimate (billing/quoting them)
+     * They ask US for pricing or quotes
+   - "vendor": Someone we buy from
+     * We send them a PO or RFQ (we're purchasing)
+     * They send us quotes/pricing IN RESPONSE to our RFQ (we're the buyer)
+   - "other": Automated emails, newsletters, spam
 
-1. CATEGORY - Confirm or correct the category:
-   - "customer" = They are our customer. This includes:
-     * They sent us an inquiry, RFQ, or PO
-     * WE sent THEM an invoice, quotation, quote, or estimate (we're billing/quoting them)
-   - "vendor" = They are our vendor/supplier. This ONLY applies when:
-     * WE sent THEM a PO or RFQ (we're buying from them)
-     * They sent us a quote/estimate in response to our RFQ
-   - "other" = Newsletter, automated, internal, spam, or unrelated
+2. ITEM_TYPE - What kind of interaction?
+   - "po_received": Customer sent us a purchase order
+   - "po_sent": We sent a PO to vendor
+   - "quote_request": Customer asking US for a quote/pricing (NOT when we ask vendors)
+   - "general": General correspondence
+   - "other": Automated/newsletters
 
-2. ITEM_TYPE - What kind of interaction:
-   - "po_received" = Customer sent us a purchase order
-   - "po_sent" = We sent a PO to a vendor (we're buying)
-   - "quote_request" = Customer asking us for a quote/pricing
-   - "general" = General inquiry, conversation, OR we sent invoice/quotation to customer
-   - "other" = Automated, newsletter, unrelated
+3. NEEDS_RESPONSE - Does the LAST email need our reply?
+   FALSE for: acknowledgments, FYI notices, policy statements, "notice" emails
+   TRUE for: questions, requests that explicitly ask for a reply
+   IMPORTANT: "Notice" emails (price notices, policy notices) = FALSE unless they ask for reply
 
-   PURCHASE ORDER DETECTION - Mark as "po_received" (customer) or "po_sent" (vendor) when you see:
-   - Explicit: "PO #12345", "Purchase Order", "PO attached", "PO number"
-   - Implicit orders: "Please proceed with the order", "Go ahead with quote #X", "We'd like to place an order"
-   - Regional variations: "Purchase requisition", "Blanket order", "Call-off order"
-   - PDF attachments named like: "PO_*.pdf", "Purchase*.pdf", "Order*.pdf"
+4. CONTACT_NAME - External party's name/company
 
-   QUOTE REQUEST DETECTION - Mark as "quote_request" when you see:
-   - Explicit: "RFQ", "Request for quote", "Please quote", "Quotation request"
-   - Implicit: "What would it cost...", "Can you provide pricing...", "How much for..."
-   - Capability inquiries: "Do you manufacture X?", "Can you make these parts?"
+5. SUMMARY - 1-2 sentence summary
 
-   NOT a quote request (use "general" instead):
-   - Document requests: packing slip, shipping label, certificate, spec sheet, drawing
-   - Status inquiries: "Where is my order?", "When will it ship?"
-   - General follow-ups: "Did you receive our PO?", "Any updates?"
-
-3. CONTACT_NAME - The person/company name from the external party (customer or vendor)
-
-4. SUMMARY - A 1-2 sentence summary of the thread's key content/status
-
-5. NEEDS_RESPONSE - Does the LAST email in this thread require a response from us?
-   Set to FALSE (no response needed) for:
-   - Simple acknowledgments: "Thanks!", "Got it!", "Perfect!", "Sounds good!", "Confirmed!"
-   - Short forms: "OK", "K", "👍", "Cheers", "Ta", "Much appreciated"
-   - Closings: "Great, thanks!" followed by signature
-   - FYI/Informational notices: Policy updates, announcements, general notices
-   - One-way communications: "Please be advised...", "For your information...", "Notice:"
-   - Statements that don't ask anything: Customer sharing their internal policies, late fees, etc.
-
-   Set to TRUE (response needed) when:
-   - Contains a direct question: "When can you ship?", "Do you have stock?"
-   - Makes a specific request: "Please send quote", "Can you expedite?"
-   - Expects follow-up: "We'll need confirmation by Friday"
-   - Has substantial actionable content: "Please find attached our PO"
-
-Respond with JSON only, no markdown:
-{"category": "customer|vendor|other", "item_type": "po_received|po_sent|quote_request|general|other", "contact_name": "name or null", "summary": "brief summary", "needs_response": true|false}`;
+Return JSON only: {"category": "...", "item_type": "...", "contact_name": "...", "summary": "...", "needs_response": true/false}`;
 
   try {
     const response = await anthropic.messages.create({
-      model: "claude-3-5-haiku-latest",
+      model: MODEL_SONNET,  // Use Sonnet for individual fallback - more reliable
       max_tokens: 300,
       system: "You are a JSON-only classifier. Always respond with valid JSON, no explanations.",
       messages: [

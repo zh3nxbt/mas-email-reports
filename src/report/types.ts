@@ -30,6 +30,7 @@ export interface CategorizedThread {
   lastEmailDate: Date | null;
   lastEmailFromUs: boolean;
   needsResponse: boolean; // AI-determined: does this thread need a response from us?
+  isNewThread: boolean; // True if first email of thread is within the window
   poDetails: PoDetails | null;
 }
 
