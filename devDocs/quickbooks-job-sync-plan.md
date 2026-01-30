@@ -12,15 +12,17 @@ The system needs to access these QuickBooks entities:
 | Entity | Purpose |
 |--------|---------|
 | **Customers** | Match email contacts to QB customer records |
-| **Estimates** | Find quotes we sent - check if marked CONFIRMED when PO received |
-| **Sales Orders** | (Future) May replace estimates as primary job tracking |
+| **Sales Orders** | **PRIMARY** - Check if SO exists for received PO |
+| **Estimates** | **FALLBACK** - Find matching estimate when no SO exists |
 | **Invoices** | Complete the documentation chain - verify jobs are invoiced |
 
-**Why all four?** Example flow:
+**Workflow:**
 1. PO received via email
-2. Check if Sales Order exists for this customer/job
-3. If no Sales Order → find the Estimate and flag it
+2. Check if Sales Order exists for this customer/job → **if yes, all good**
+3. If no Sales Order → find matching Estimate and flag "needs SO"
 4. After job complete → verify Invoice was created
+
+**Decision:** Sales Orders are the source of truth. Estimate status (CONFIRMED/COMPLETE) is NOT used.
 
 ## Current File Structure
 ```
@@ -60,18 +62,15 @@ src/
 - [x] Fuzzy matching (normalize names, handle variations)
 - [x] Returns `{ customerId, customerName, confidence, matchType }` or `null`
 
-### Phase 3: Job Documents Organization ✅ (partial)
+### Phase 3: Job Documents Organization ✅
 - [x] Created `job-documents.ts` with:
-  - `getCustomerJobDocuments()` - fetches estimates, sales orders, invoices in parallel
-  - `parseEstimateStatus()` - extracts CONFIRMED/COMPLETE/BLANK from custom field
+  - `getCustomerJobDocuments()` - fetches sales orders, invoices, estimates in parallel
+  - `findMatchingSalesOrder()` - matches PO to existing SO by ref/amount
+  - `findMatchingEstimate()` - fallback when no SO exists
   - `getJobDocumentsSummary()` - statistics for quick overview
-  - Helper functions for filtering and analysis
 - [x] Added to test script (`npm run qb:test`)
 
-**⏸️ BLOCKED:** Awaiting decision on Estimates vs Sales Orders as primary job tracker
-- If Sales Orders are used properly, estimate status (CONFIRMED/COMPLETE/BLANK) becomes obsolete
-- Job status would be inferred from document chain: Estimate → Sales Order → Invoice
-- Note added in code about this potential obsolescence
+**Decision:** Sales Orders are the PRIMARY source of truth. Estimates are fallback only (used to identify which estimate needs to be converted to SO).
 
 ### Phase 3.5: Trusted Domain Filter ✅
 Created `trusted-domains.ts` to prevent processing emails from suspicious domains:
@@ -113,15 +112,15 @@ Created `sync-analyzer.ts` with trust filter, full logic TODO:
 ```typescript
 type SyncAlert = {
   type:
-    | "po_no_estimate"        // PO received, no matching estimate found
-    | "po_no_sales_order"     // PO received, no Sales Order created
-    | "po_not_confirmed"      // PO received, estimate exists but not CONFIRMED
+    | "po_has_so"             // PO received, matching Sales Order found (all good)
+    | "po_no_so_has_estimate" // PO received, no SO but found matching estimate
+    | "po_no_so_no_estimate"  // PO received, no SO and no matching estimate
     | "job_not_invoiced"      // Sales Order complete but no invoice
     | "suspicious_po_email"   // PO email from untrusted domain (potential phishing)
   customer: { email: string, name: string, qbId?: string }
   poThread?: CategorizedThread
-  estimate?: QBEstimate
-  salesOrder?: QBSalesOrder
+  estimate?: QBEstimate       // Only set for po_no_so_has_estimate
+  salesOrder?: QBSalesOrder   // Only set for po_has_so
   suggestedAction: string
 }
 ```
@@ -129,9 +128,9 @@ type SyncAlert = {
 **Alert descriptions:**
 | Alert Type | Trigger | Suggested Action |
 |------------|---------|------------------|
-| `po_no_estimate` | Customer sent PO, no matching estimate in QB | Create estimate or check if job exists under different name |
-| `po_no_sales_order` | PO received, estimate exists but no SO created | Convert estimate to Sales Order |
-| `po_not_confirmed` | PO received, estimate exists but status ≠ CONFIRMED | Update estimate status to CONFIRMED |
+| `po_has_so` | PO received, matching Sales Order exists | No action needed (informational) |
+| `po_no_so_has_estimate` | PO received, no SO but estimate found | Convert estimate to Sales Order |
+| `po_no_so_no_estimate` | PO received, no SO and no estimate | Create Sales Order (or check if job exists under different name) |
 | `job_not_invoiced` | Sales Order marked complete but no invoice | Create invoice for completed job |
 | `suspicious_po_email` | PO email from domain we've never emailed | Review manually - may be phishing or new customer |
 

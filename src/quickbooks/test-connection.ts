@@ -110,45 +110,39 @@ async function main() {
   }
   console.log("");
 
-  // Test job documents - use first customer with estimates
+  // Test job documents - use first customer with sales orders
   console.log("[7] Testing job documents...");
   try {
-    // Get a customer that has estimates (from our earlier fetch)
-    const estimateResponse = await client.getEstimates({ limit: 1 });
-    if (estimateResponse.data.length > 0) {
-      const testCustomerId = estimateResponse.data[0].customer.id;
-      const testCustomerName = estimateResponse.data[0].customer.fullName || "Unknown";
+    // Get a customer that has sales orders
+    const soResponse = await client.getSalesOrders({ limit: 1 });
+    if (soResponse.data.length > 0) {
+      const testCustomerId = soResponse.data[0].customer.id;
+      const testCustomerName = soResponse.data[0].customer.fullName || "Unknown";
 
       console.log(`  Fetching job documents for: ${testCustomerName}`);
       const jobDocs = await getCustomerJobDocuments(client, testCustomerId);
       const summary = getJobDocumentsSummary(jobDocs);
 
       console.log(`  Customer: ${jobDocs.customerName}`);
-      console.log(`  Estimates: ${summary.totalEstimates} total`);
-      console.log(`    - CONFIRMED: ${summary.confirmedEstimates}`);
-      console.log(`    - COMPLETE: ${summary.completeEstimates}`);
-      console.log(`    - BLANK: ${summary.blankEstimates}`);
       console.log(`  Sales Orders: ${summary.totalSalesOrders} total (${summary.openSalesOrders} open)`);
       console.log(`  Invoices: ${summary.totalInvoices} total (${summary.unpaidInvoices} unpaid)`);
-      if (summary.confirmedWithoutSO > 0) {
-        console.log(`  WARNING: ${summary.confirmedWithoutSO} confirmed estimate(s) without sales order`);
-      }
+      console.log(`  Estimates: ${summary.totalEstimates} (fallback reference only)`);
 
-      // Show sample estimate with status
-      if (jobDocs.estimates.length > 0) {
+      // Show sample sales order
+      if (jobDocs.salesOrders.length > 0) {
         console.log("");
-        console.log("  Sample estimate:");
-        const sample = jobDocs.estimates[0];
+        console.log("  Sample sales order:");
+        const sample = jobDocs.salesOrders[0];
         console.log(`    - Ref: #${sample.refNumber}`);
         console.log(`    - Amount: $${sample.totalAmount}`);
-        console.log(`    - Status: ${sample.status} (raw: ${sample.jobStatus || "none"})`);
+        console.log(`    - Fully Invoiced: ${sample.isFullyInvoiced}`);
         console.log(`    - Date: ${sample.transactionDate}`);
       }
     } else {
-      console.log("  No estimates found to test with");
+      console.log("  No sales orders found to test with");
     }
   } catch (error) {
-    console.log("  Job documents test skipped (no estimates available)");
+    console.log("  Job documents test skipped (no sales orders available)");
   }
   console.log("");
 

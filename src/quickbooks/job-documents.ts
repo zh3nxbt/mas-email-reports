@@ -1,13 +1,16 @@
 /**
  * Job Documents Organizer
  *
- * Provides a unified view of customer job documents (Estimates, Sales Orders, Invoices)
+ * Provides a unified view of customer job documents (Sales Orders, Invoices, Estimates)
  * to trace the job lifecycle:
- *   Email PO received → Sales Order exists? → If not, flag Estimate → Eventually Invoiced?
+ *   Email PO received → Sales Order exists? → If not, find matching Estimate → Eventually Invoiced?
+ *
+ * Sales Orders are the PRIMARY source of truth for confirmed jobs.
+ * Estimates are only used as fallback when a PO has no corresponding Sales Order.
  */
 
 import type { ConductorClient } from "./conductor-client.js";
-import type { QBEstimate, QBSalesOrder, QBInvoice, ParsedEstimate } from "./types.js";
+import type { QBEstimate, QBSalesOrder, QBInvoice } from "./types.js";
 
 // ============================================================
 // Types
@@ -16,9 +19,9 @@ import type { QBEstimate, QBSalesOrder, QBInvoice, ParsedEstimate } from "./type
 export interface CustomerJobDocuments {
   customerId: string;
   customerName: string;
-  estimates: ParsedEstimate[];
   salesOrders: QBSalesOrder[];
   invoices: QBInvoice[];
+  estimates: QBEstimate[]; // Fallback only - used when no SO matches a PO
 }
 
 export interface GetJobDocumentsOptions {
@@ -31,59 +34,14 @@ export interface GetJobDocumentsOptions {
 }
 
 // ============================================================
-// Estimate Status Parsing
-// ============================================================
-
-/**
- * Parse the custom field status from a QB estimate
- *
- * MAS uses a custom field to track estimate status:
- * - CONFIRMED: Customer confirmed, ready to produce
- * - COMPLETE: Job finished
- * - blank: Pending/not yet confirmed
- *
- * NOTE: This estimate status tracking will become OBSOLETE if we have
- * full sales order functionality. The proper workflow would be:
- *   Estimate → Sales Order (confirms job) → Invoice (completes job)
- * At that point, estimate status can be inferred from whether a
- * corresponding Sales Order exists, rather than relying on custom fields.
- */
-export function parseEstimateStatus(estimate: QBEstimate): ParsedEstimate {
-  const statusField = estimate.customFields?.find((f) =>
-    f.name.toLowerCase().includes("status")
-  );
-  const rawStatus = statusField?.value?.toUpperCase()?.trim();
-
-  let status: ParsedEstimate["status"] = "BLANK";
-  if (rawStatus === "CONFIRMED") {
-    status = "CONFIRMED";
-  } else if (rawStatus === "COMPLETE") {
-    status = "COMPLETE";
-  }
-
-  return {
-    ...estimate,
-    status,
-    jobStatus: statusField?.value || undefined,
-  };
-}
-
-/**
- * Parse status for multiple estimates
- */
-export function parseEstimatesStatus(estimates: QBEstimate[]): ParsedEstimate[] {
-  return estimates.map(parseEstimateStatus);
-}
-
-// ============================================================
 // Main Function
 // ============================================================
 
 /**
  * Get all job-related documents for a customer
  *
- * Fetches estimates, sales orders, and invoices in parallel
- * and returns them in a unified structure for job tracking.
+ * Fetches sales orders, invoices, and estimates in parallel.
+ * Sales Orders are the primary reference; estimates are fallback only.
  */
 export async function getCustomerJobDocuments(
   client: ConductorClient,
@@ -96,8 +54,7 @@ export async function getCustomerJobDocuments(
   const updatedAfter = since?.toISOString();
 
   // Fetch all document types in parallel
-  const [estimates, salesOrders, invoices, customer] = await Promise.all([
-    client.getEstimatesForCustomer(customerId, { updatedAfter }),
+  const [salesOrders, invoices, estimates, customer] = await Promise.all([
     client.getSalesOrdersForCustomer(customerId, {
       updatedAfter,
       includeFullyInvoiced,
@@ -106,78 +63,105 @@ export async function getCustomerJobDocuments(
       updatedAfter,
       unpaidOnly: !includePaidInvoices,
     }),
+    client.getEstimatesForCustomer(customerId, { updatedAfter }),
     client.getCustomer(customerId),
   ]);
-
-  // Parse estimate statuses
-  const parsedEstimates = parseEstimatesStatus(estimates);
 
   return {
     customerId,
     customerName: customer.fullName || customer.name,
-    estimates: parsedEstimates,
     salesOrders,
     invoices,
+    estimates,
   };
 }
 
 // ============================================================
-// Helper Functions
+// Sales Order Helpers (Primary)
 // ============================================================
 
 /**
- * Filter estimates by status
- */
-export function filterEstimatesByStatus(
-  estimates: ParsedEstimate[],
-  status: ParsedEstimate["status"]
-): ParsedEstimate[] {
-  return estimates.filter((e) => e.status === status);
-}
-
-/**
- * Get estimates that are confirmed but don't have a corresponding sales order
- *
- * This helps identify jobs that were confirmed but haven't been
- * converted to sales orders yet (potential oversight).
- */
-export function getConfirmedEstimatesWithoutSalesOrders(
-  docs: CustomerJobDocuments
-): ParsedEstimate[] {
-  const confirmedEstimates = filterEstimatesByStatus(docs.estimates, "CONFIRMED");
-
-  // For each confirmed estimate, check if there's a matching sales order
-  // Match by ref number or by similar amount (heuristic)
-  return confirmedEstimates.filter((estimate) => {
-    const hasMatchingSO = docs.salesOrders.some((so) => {
-      // Try to match by ref number
-      if (
-        estimate.refNumber &&
-        so.refNumber &&
-        so.refNumber.includes(estimate.refNumber)
-      ) {
-        return true;
-      }
-      // Try to match by amount (same customer, same amount = likely same job)
-      if (
-        estimate.totalAmount &&
-        so.totalAmount &&
-        estimate.totalAmount === so.totalAmount
-      ) {
-        return true;
-      }
-      return false;
-    });
-    return !hasMatchingSO;
-  });
-}
-
-/**
- * Get open sales orders (not fully invoiced)
+ * Get open sales orders (not fully invoiced, not manually closed)
  */
 export function getOpenSalesOrders(docs: CustomerJobDocuments): QBSalesOrder[] {
   return docs.salesOrders.filter((so) => !so.isFullyInvoiced && !so.isManuallyClosed);
 }
+
+/**
+ * Find a sales order that might match a PO
+ * Matches by ref number similarity or amount
+ */
+export function findMatchingSalesOrder(
+  docs: CustomerJobDocuments,
+  poNumber?: string,
+  poAmount?: number
+): QBSalesOrder | null {
+  for (const so of docs.salesOrders) {
+    // Match by PO number in ref or memo
+    if (poNumber) {
+      const poNorm = poNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const refNorm = (so.refNumber || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const memoNorm = (so.memo || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      if (refNorm.includes(poNorm) || memoNorm.includes(poNorm)) {
+        return so;
+      }
+    }
+
+    // Match by amount (within 5% tolerance)
+    if (poAmount && so.totalAmount) {
+      const soAmount = parseFloat(so.totalAmount);
+      const tolerance = poAmount * 0.05;
+      if (Math.abs(soAmount - poAmount) <= tolerance) {
+        return so;
+      }
+    }
+  }
+
+  return null;
+}
+
+// ============================================================
+// Estimate Helpers (Fallback)
+// ============================================================
+
+/**
+ * Find an estimate that might match a PO (when no Sales Order exists)
+ * Only used as fallback - the alert would be "PO received, no SO, found estimate"
+ */
+export function findMatchingEstimate(
+  docs: CustomerJobDocuments,
+  poNumber?: string,
+  poAmount?: number
+): QBEstimate | null {
+  for (const est of docs.estimates) {
+    // Match by ref number
+    if (poNumber) {
+      const poNorm = poNumber.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const refNorm = (est.refNumber || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+      const memoNorm = (est.memo || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+
+      if (refNorm.includes(poNorm) || memoNorm.includes(poNorm)) {
+        return est;
+      }
+    }
+
+    // Match by amount (within 5% tolerance)
+    if (poAmount && est.totalAmount) {
+      const estAmount = parseFloat(est.totalAmount);
+      const tolerance = poAmount * 0.05;
+      if (Math.abs(estAmount - poAmount) <= tolerance) {
+        return est;
+      }
+    }
+  }
+
+  return null;
+}
+
+// ============================================================
+// Invoice Helpers
+// ============================================================
 
 /**
  * Get unpaid invoices
@@ -186,19 +170,16 @@ export function getUnpaidInvoices(docs: CustomerJobDocuments): QBInvoice[] {
   return docs.invoices.filter((inv) => !inv.isPaid);
 }
 
-/**
- * Summary statistics for a customer's job documents
- */
+// ============================================================
+// Summary
+// ============================================================
+
 export interface JobDocumentsSummary {
-  totalEstimates: number;
-  confirmedEstimates: number;
-  blankEstimates: number;
-  completeEstimates: number;
   totalSalesOrders: number;
   openSalesOrders: number;
   totalInvoices: number;
   unpaidInvoices: number;
-  confirmedWithoutSO: number;
+  totalEstimates: number; // For reference only
 }
 
 /**
@@ -206,14 +187,10 @@ export interface JobDocumentsSummary {
  */
 export function getJobDocumentsSummary(docs: CustomerJobDocuments): JobDocumentsSummary {
   return {
-    totalEstimates: docs.estimates.length,
-    confirmedEstimates: filterEstimatesByStatus(docs.estimates, "CONFIRMED").length,
-    blankEstimates: filterEstimatesByStatus(docs.estimates, "BLANK").length,
-    completeEstimates: filterEstimatesByStatus(docs.estimates, "COMPLETE").length,
     totalSalesOrders: docs.salesOrders.length,
     openSalesOrders: getOpenSalesOrders(docs).length,
     totalInvoices: docs.invoices.length,
     unpaidInvoices: getUnpaidInvoices(docs).length,
-    confirmedWithoutSO: getConfirmedEstimatesWithoutSalesOrders(docs).length,
+    totalEstimates: docs.estimates.length,
   };
 }

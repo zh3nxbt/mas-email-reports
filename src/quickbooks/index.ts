@@ -16,11 +16,9 @@ export {
 } from "./trusted-domains.js";
 export {
   getCustomerJobDocuments,
-  parseEstimateStatus,
-  parseEstimatesStatus,
-  filterEstimatesByStatus,
-  getConfirmedEstimatesWithoutSalesOrders,
   getOpenSalesOrders,
+  findMatchingSalesOrder,
+  findMatchingEstimate,
   getUnpaidInvoices,
   getJobDocumentsSummary,
 } from "./job-documents.js";

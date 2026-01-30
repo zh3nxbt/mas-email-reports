@@ -19,9 +19,9 @@ import {
 
 export interface SyncAlert {
   type:
-    | "po_no_estimate" // PO received, no matching estimate found
-    | "po_no_sales_order" // PO received, no Sales Order created
-    | "po_not_confirmed" // PO received, estimate exists but not CONFIRMED
+    | "po_has_so" // PO received, matching Sales Order found (all good)
+    | "po_no_so_has_estimate" // PO received, no SO but found matching estimate
+    | "po_no_so_no_estimate" // PO received, no SO and no matching estimate
     | "job_not_invoiced" // Sales Order complete but no invoice
     | "suspicious_po_email"; // PO email from untrusted domain (potential phishing)
   customer: { email: string; name: string | null; qbId?: string };
@@ -97,9 +97,11 @@ export async function analyzePoThreads(
     // TODO (Phase 4): Implement full sync logic here:
     // 1. Extract PO details from PDF attachments using pdf-extractor
     // 2. Match email contact to QB customer using customer-matcher
-    // 3. Find Sales Orders/Estimates for matched customer
-    // 4. Compare and identify discrepancies
-    // 5. Add to result.alerts
+    // 3. Fetch job documents for matched customer
+    // 4. Check if matching Sales Order exists → po_has_so (all good)
+    // 5. If no SO, check for matching Estimate → po_no_so_has_estimate
+    // 6. If neither → po_no_so_no_estimate
+    // 7. Add alerts to result.alerts
   }
 
   return result;

@@ -96,11 +96,6 @@ export interface QBEstimate {
   updatedAt?: string;
 }
 
-// Parsed estimate with custom field status
-export interface ParsedEstimate extends QBEstimate {
-  status: "CONFIRMED" | "COMPLETE" | "BLANK";
-  jobStatus?: string; // Future: in production, complete, delivered, invoiced
-}
 
 // ============================================================
 // Sales Order
