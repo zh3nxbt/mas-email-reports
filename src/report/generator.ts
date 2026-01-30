@@ -471,7 +471,7 @@ export interface MiddayReportData {
   pendingTodos: {
     id: number;
     threadKey: string;
-    todoType: "po_unacknowledged" | "quote_unanswered" | "general_unanswered";
+    todoType: "po_unacknowledged" | "quote_unanswered" | "general_unanswered" | "vendor_followup";
     description: string | null;
     contactEmail: string | null;
     contactName: string | null;

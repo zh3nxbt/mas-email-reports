@@ -6,13 +6,31 @@ export function identifyTodos(threads: CategorizedThread[]): IdentifiedTodo[] {
   const todos: IdentifiedTodo[] = [];
 
   for (const thread of threads) {
-    // Only look at customer threads where last email is NOT from us
-    if (thread.category !== "customer") {
+    // If the last email is from us, no action needed on this thread
+    if (thread.lastEmailFromUs) {
       continue;
     }
 
-    // If the last email is from us, no action needed on this thread
-    if (thread.lastEmailFromUs) {
+    // Handle VENDOR threads - when vendor asks follow-up questions on our RFQ
+    if (thread.category === "vendor") {
+      // If vendor sent last email and AI says it needs response, create todo
+      // This catches scenarios like: MAS sends RFQ → Vendor asks clarifying question
+      if (thread.needsResponse) {
+        todos.push({
+          threadKey: thread.threadKey,
+          todoType: "vendor_followup",
+          description: `Vendor asked a question that needs response. ${thread.summary || ""}`.trim(),
+          contactEmail: thread.contactEmail,
+          contactName: thread.contactName,
+          originalDate: thread.lastEmailDate,
+          subject: thread.subject,
+        });
+      }
+      continue;
+    }
+
+    // Handle CUSTOMER threads
+    if (thread.category !== "customer") {
       continue;
     }
 
@@ -103,6 +121,11 @@ export function getTodoPriority(todoType: TodoType, age: number): "high" | "medi
     return age > 2 ? "high" : "medium";
   }
 
+  // Vendor follow-ups are medium priority (we need their quote)
+  if (todoType === "vendor_followup") {
+    return age > 1 ? "high" : "medium";
+  }
+
   // General unanswered become medium if old
   return age > 3 ? "medium" : "low";
 }
@@ -137,6 +160,8 @@ export function formatTodoType(todoType: TodoType): string {
       return "Quote Unanswered";
     case "general_unanswered":
       return "Awaiting Response";
+    case "vendor_followup":
+      return "Vendor Needs Reply";
     default:
       return "Todo";
   }

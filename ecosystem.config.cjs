@@ -10,7 +10,7 @@ module.exports = {
       name: "mas-api",
       script: "npm",
       args: "start",
-      cwd: "/var/www/email-fetcher",
+      cwd: "/var/www/mas-email-reports",
       env: {
         NODE_ENV: "production",
         PORT: 3000,

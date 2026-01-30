@@ -1,6 +1,6 @@
 #!/bin/bash
 # Run report with proper timezone handling and failure notifications
-# Usage: ./run-report.sh [morning|daily]
+# Usage: ./run-report.sh [morning|midday|daily]
 
 # Set timezone to EST/EDT (handles daylight saving automatically)
 export TZ="America/New_York"
@@ -66,6 +66,9 @@ echo "${TIMESTAMP}: Starting ${REPORT_TYPE} report" >> "$LOG_FILE"
     if [ "$REPORT_TYPE" = "morning" ]; then
         echo "Generating morning report..."
         npm run report:morning
+    elif [ "$REPORT_TYPE" = "midday" ]; then
+        echo "Generating midday report..."
+        npm run report:midday
     else
         echo "Generating daily summary..."
         npm run report

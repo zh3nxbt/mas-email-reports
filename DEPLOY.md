@@ -27,11 +27,11 @@ sudo timedatectl set-timezone America/New_York
 
 ```bash
 # Create app directory
-sudo mkdir -p /var/www/email-fetcher
-sudo chown $USER:$USER /var/www/email-fetcher
+sudo mkdir -p /var/www/mas-email-reports
+sudo chown $USER:$USER /var/www/mas-email-reports
 
 # Clone or copy your code
-cd /var/www/email-fetcher
+cd /var/www/mas-email-reports
 git clone <your-repo-url> .
 # Or scp/rsync from local machine
 
@@ -204,7 +204,7 @@ pm2 describe mas-report-daily
 ## 9. Manual Report Generation
 
 ```bash
-cd /var/www/email-fetcher
+cd /var/www/mas-email-reports
 
 # Sync emails
 npm run sync

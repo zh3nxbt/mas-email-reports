@@ -39,8 +39,9 @@ Todos are identified when:
 1. **po_unacknowledged**: Customer sent PO, we haven't replied
 2. **quote_unanswered**: Customer requested quote, we haven't replied
 3. **general_unanswered**: Customer email, last message is from them
+4. **vendor_followup**: Vendor asked a follow-up question (e.g., we sent RFQ, vendor needs clarification)
 
-**Important:** AI also checks `needsResponse` - if the last email is "thanks", "sounds good", or similar acknowledgment, no todo is created even if the last email is from the customer.
+**Important:** AI also checks `needsResponse` - if the last email is "thanks", "sounds good", or similar acknowledgment, no todo is created even if the last email is from the customer/vendor.
 
 ### Acknowledgment Detection
 
@@ -83,7 +84,7 @@ A todo is resolved in two ways:
 - This prevents manually resolved todos from reappearing when customers send follow-up emails
 
 ### UI Labels
-- **Todo labels**: "Need to Ack PO", "Need to Send Quote", "Need to Reply"
+- **Todo labels**: "Need to Ack PO", "Need to Send Quote", "Need to Reply", "Reply to Vendor"
 - **Thread labels**: "PO Received", "PO Sent", "RFQ", "General"
 - **Sort order**: PO Received/Sent → RFQ → General → Other
 
@@ -380,7 +381,7 @@ Each report checks if todos were resolved by email activity in that window and m
 
 This repo uses SSH with a custom host alias. The remote is configured as:
 ```
-git@github-zh3n:zh3nxbt/email-fetcher.git
+git@github-zh3n:zh3nxbt/mas-email-reports.git
 ```
 
 This uses the `github-zh3n` alias defined in `~/.ssh/config`:

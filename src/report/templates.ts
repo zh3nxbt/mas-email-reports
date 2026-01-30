@@ -277,6 +277,8 @@ function getTodoLabel(todoType: string): { text: string; class: string } {
       return { text: "Need to Send Quote", class: "pending" };
     case "general_unanswered":
       return { text: "Need to Reply", class: "pending" };
+    case "vendor_followup":
+      return { text: "Reply to Vendor", class: "pending" };
     default:
       return { text: "Action Needed", class: "pending" };
   }
