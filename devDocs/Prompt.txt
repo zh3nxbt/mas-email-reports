@@ -1,0 +1,10 @@
+Review our job sync, step 1 to step 2 are clear, but for step 3, lets change our logic: 
+
+Lets make a plan for this:                                                                                                                                                                                                                                                             
+(1) in step 3, we identify all emails with type = po_received                                                                                                                                                                                                                                                                                             (2) we use AI to look at the each email's attachment and determine the PO file by name. we should only check the email in the thread that is classified as po_received, not the whole thread.
+(3) we use AI to analyze the PO for required values (email_po_attachments table requires po_number, po_total and analsis_json, confirm by checking table)
+(4) if in step 3 we see its not a PO, then we go back to step 2, with this context, and try
+(5) if po was found, download PO and save database entry
+(6) if we fail to find the po, we write a log into /logs folder
+
+what u think? compare against what we have now and upgrade
