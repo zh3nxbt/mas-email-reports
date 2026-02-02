@@ -32,6 +32,7 @@ export interface CategorizedThread {
   needsResponse: boolean; // AI-determined: does this thread need a response from us?
   isNewThread: boolean; // True if first email of thread is within the window
   poDetails: PoDetails | null;
+  isSuspicious: boolean; // True if contact email is from untrusted domain (po_received only)
 }
 
 // Todo item before DB insertion
@@ -103,6 +104,7 @@ export interface ReportOptions {
   date?: Date; // Override date for historical reports
   preview?: boolean; // Output to console instead of sending email
   skipEmail?: boolean; // Generate but don't send
+  reanalyze?: boolean; // Force re-analysis of all threads (bypass cache)
 }
 
 // Morning report specific data

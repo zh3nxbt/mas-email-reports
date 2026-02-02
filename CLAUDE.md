@@ -246,7 +246,17 @@ Post-AI processing uses only **definitional constraints** (not pattern heuristic
 PDF attachments are analyzed using **Claude's visual PDF analysis** (not text extraction):
 - PDFs are sent as base64 to Claude, which "sees" the document visually
 - This preserves tables, formatting, and can read scanned/image-based PDFs
-- See `src/report/pdf-extractor.ts` → `analyzePdfWithVision()`
+- See `src/storage/po-attachment-manager.ts` → `getOrAnalyzePoPdf()`
+
+**Caching flow (automatic when `jobs:check` runs):**
+1. Check if analysis exists in `email_po_attachments` table → return cached result
+2. If not cached: fetch PDF from IMAP
+3. Store to Supabase Storage (if configured, otherwise skip)
+4. Analyze with Claude vision
+5. Cache results (poNumber, poTotal, analysisJson) in database
+6. Return analysis
+
+This avoids re-fetching from IMAP and re-calling Claude on subsequent runs.
 
 **IMAP base64 decoding:** When fetching PDF attachments from IMAP, the content is often still base64-encoded. The code checks for the PDF magic number (`%PDF`) and decodes if needed:
 ```typescript
@@ -256,9 +266,7 @@ if (first4 !== "%PDF") {
 }
 ```
 
-**TODO:** Add DOCX support - Claude doesn't support DOCX directly. Options:
-1. Convert DOCX to PDF before analysis
-2. Use `mammoth` library to extract content as HTML/text
+**DOCX support:** DOCX files are converted to PDF using `docx-pdf` library before analysis. Legacy `.doc` files are not supported (would need LibreOffice).
 
 ### Thread Grouping
 
@@ -439,6 +447,10 @@ CONDUCTOR_END_USER_ID=...
 
 # Optional: Manual trusted domains (comma-separated)
 TRUSTED_DOMAINS=newvendor.com,legitcustomer.ca
+
+# Optional: Supabase Storage for PO PDFs (if not set, PDFs analyzed in-memory only)
+SUPABASE_URL=https://xxx.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
 ## File Structure
@@ -483,7 +495,13 @@ src/
     refresh-cache.ts       # CLI to force-refresh customer cache
   jobs/
     sync-analyzer.ts       # PO→QB comparison, generates alerts
+    alert-manager.ts       # Alert persistence, escalation, resolution
+    alert-templates.ts     # HTML email templates for alerts
+    run-jobs-report.ts     # CLI entry point for jobs:check
     test-sync-analyzer.ts  # CLI to test sync analyzer
+  storage/
+    supabase-client.ts     # Supabase Storage client (optional)
+    po-attachment-manager.ts  # PO PDF storage + analysis caching
 data/
   qb-customers.json        # Cached QB customer list (auto-generated)
 ```
@@ -496,6 +514,7 @@ data/
 - **todo_items**: Action items identified in reports
 - **dismissed_threads**: Manually dismissed threadKeys (persists across report regeneration)
 - **qb_sync_alerts**: QB sync alerts with 2-stage lifecycle (Phase 6)
+- **email_po_attachments**: PO PDFs with cached analysis (poNumber, poTotal, analysisJson)
 
 ## Scheduling
 

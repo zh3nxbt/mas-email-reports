@@ -14,7 +14,7 @@
 import { db } from "../db/index.js";
 import { emails } from "../db/schema.js";
 import { sql } from "drizzle-orm";
-import { getCachedCustomers, getCacheStats } from "./customer-cache.js";
+import { getCachedCustomers } from "./customer-cache.js";
 import { ConductorClient } from "./conductor-client.js";
 
 /**
@@ -99,27 +99,11 @@ function getManualWhitelist(): Set<string> {
 async function getQbCustomerDomains(): Promise<Set<string>> {
   const domains = new Set<string>();
 
-  try {
-    // Check if cache exists before trying to use it
-    const stats = getCacheStats();
-    if (!stats.exists) {
-      // Cache doesn't exist - try to create it if we have credentials
-      if (process.env.CONDUCTOR_API_KEY && process.env.CONDUCTOR_END_USER_ID) {
-        const client = new ConductorClient();
-        const customers = await getCachedCustomers(client);
-        for (const customer of customers) {
-          if (customer.email) {
-            const domain = extractDomain(customer.email);
-            if (domain) {
-              domains.add(domain);
-            }
-          }
-        }
-      }
-      return domains;
-    }
+  if (!process.env.CONDUCTOR_API_KEY || !process.env.CONDUCTOR_END_USER_ID) {
+    return domains;
+  }
 
-    // Cache exists - load it (getCachedCustomers will use cache if fresh)
+  try {
     const client = new ConductorClient();
     const customers = await getCachedCustomers(client);
 

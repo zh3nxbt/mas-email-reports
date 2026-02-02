@@ -258,6 +258,84 @@ Since PO numbers may not directly match estimate numbers:
 5. [x] Test trusted domain filter with real sent emails + QB customer domains
 6. [x] Test sync analyzer end-to-end with `npm run qb:sync-analyze`
 
+## Recent Fixes
+
+### `jobs:check --since` Thread Persistence (Feb 2026)
+**Problem:** When running `npm run jobs:check --since=2025-01-01`, categorized threads were analyzed for QB sync but not persisted to `report_threads`. This meant:
+- PO details extracted from PDFs were lost after the run
+- No historical record of which emails were categorized as `po_received`, `vendor`, etc.
+- Alert analysis worked, but underlying thread data wasn't stored
+
+**Solution:** Added `saveCategorizedThreads()` helper function in `run-jobs-report.ts`:
+1. Creates a `sync_check` report entry to link threads to
+2. Saves all categorized threads to `report_threads` table
+3. Logs confirmation: `Saved X categorized threads to report_threads (report ID: Y)`
+
+**Key insight:** The `report_threads` table requires a `reportId` foreign key, so we create a minimal report entry as a container.
+
+**Avoiding conflicts with email reports:** Added new `sync_check` report type to the schema to prevent QB sync from colliding with daily email reports. The email report generator deletes existing reports with matching `reportDate` + `reportType` before creating new ones - using a dedicated type ensures they don't interfere.
+
+**Schema change:**
+- Added `sync_check` to `email_report_type` enum in `src/db/schema.ts`
+- Applied via: `ALTER TYPE email_report_type ADD VALUE IF NOT EXISTS 'sync_check'`
+
+**Code location:** `src/jobs/run-jobs-report.ts` → `saveCategorizedThreads()`
+
+**Same AI categorization:** Both QB sync and email report flows use the same `categorizeThreads()` function from `src/report/categorizer.ts` - same prompt, same logic, consistent results.
+
+### AI Categorization Caching (Feb 2026)
+**Problem:** Running reports or `jobs:check` multiple times would call Claude API every time, even for threads that hadn't changed. This wasted API costs and added latency.
+
+**Solution:** Added caching logic to `categorizeThreads()` that reuses previous categorizations from `report_threads`:
+
+1. **Default behavior**: Check `report_threads` for existing categorization by `threadKey`
+2. **Cache validity**: Only reuse if `lastEmailDate` matches (thread hasn't received new emails)
+3. **New threads**: Always sent to AI for analysis
+4. **Changed threads**: If `lastEmailDate` differs, re-analyze with AI
+
+**`--reanalyze` flag**: Force re-analysis of all threads, bypassing cache. Use this after improving AI prompts.
+
+**Commands:**
+```bash
+# Normal run - uses cache for unchanged threads
+npm run report
+npm run report -- --morning
+npm run jobs:check
+
+# Force re-analysis (after prompt improvements)
+npm run report -- --reanalyze
+npm run report -- --morning --date=2025-01-20 --reanalyze
+npm run report -- --midday --date=2025-01-20 --reanalyze --preview
+npm run jobs:check -- --reanalyze
+npm run jobs:check -- --since=2025-01-01 --reanalyze
+npm run jobs:check -- --since=2025-01-01 --reanalyze --preview
+```
+
+**Flag combinations:**
+| Flag | Effect |
+|------|--------|
+| `--morning` | 7am report (4pm yesterday → 7am today) |
+| `--midday` | 12pm report (7am → 12pm today) |
+| (default) | 4pm report (12pm → 4pm today) |
+| `--date=YYYY-MM-DD` | Generate for specific date instead of today |
+| `--since=YYYY-MM-DD` | Jobs: check all POs from date to now |
+| `--reanalyze` | Bypass cache, re-run AI on all threads |
+| `--preview` | Output to console, don't save or email |
+
+**Console output with caching:**
+```
+Found 15 emails in window
+Grouped into 8 threads (with full history)
+  Using cached categorizations for 6 threads    ← Cache hits
+  Analyzing 2 threads with AI...                ← Only new/changed threads
+```
+
+**Code locations:**
+- `src/report/categorizer.ts` → `getCachedCategorizations()`, `isCacheValid()`
+- `src/report/types.ts` → `ReportOptions.reanalyze`
+- `src/report/run-report.ts` → CLI flag parsing
+- `src/jobs/run-jobs-report.ts` → CLI flag parsing
+
 ## Future Enhancements
 
 ### Phase 7: `job_not_invoiced` Alert (Planned)

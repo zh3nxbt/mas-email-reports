@@ -1,7 +1,7 @@
 import { pgTable, text, integer, serial, timestamp, boolean, date, jsonb, pgEnum } from "drizzle-orm/pg-core";
 
 // Enums
-export const reportTypeEnum = pgEnum("email_report_type", ["daily_summary", "morning_reminder", "midday_report"]);
+export const reportTypeEnum = pgEnum("email_report_type", ["daily_summary", "morning_reminder", "midday_report", "sync_check"]);
 export const categoryEnum = pgEnum("email_category", ["customer", "vendor", "other"]);
 export const itemTypeEnum = pgEnum("email_item_type", ["po_sent", "po_received", "quote_request", "general", "other"]);
 export const todoTypeEnum = pgEnum("email_todo_type", ["po_unacknowledged", "quote_unanswered", "general_unanswered", "vendor_followup"]);
@@ -110,6 +110,24 @@ export const syncMetadata = pgTable("email_sync_metadata", {
   lastUid: integer("last_uid"), // Highest UID synced
 });
 
+// PO Attachments - stores PO PDFs in Supabase Storage with cached analysis
+export const poAttachments = pgTable("email_po_attachments", {
+  id: serial("id").primaryKey(),
+  emailId: integer("email_id").references(() => emails.id, { onDelete: "cascade" }),
+  threadKey: text("thread_key").notNull(),
+  filename: text("filename").notNull(),
+  originalFilename: text("original_filename"), // For converted files (e.g., DOCX → PDF)
+  storagePath: text("storage_path").notNull(), // po-attachments/2026/01/abc123.pdf
+  contentType: text("content_type"),
+  sizeBytes: integer("size_bytes"),
+  // Cached analysis results (so we don't re-call Claude)
+  poNumber: text("po_number"),
+  poTotal: integer("po_total"), // cents
+  analysisJson: jsonb("analysis_json"), // full extraction result
+  analyzedAt: timestamp("analyzed_at"),
+  uploadedAt: timestamp("uploaded_at").notNull().defaultNow(),
+});
+
 // QB Sync Alerts - persists alerts for historical tracking and dashboard UI
 export const qbSyncAlerts = pgTable("qb_sync_alerts", {
   id: serial("id").primaryKey(),
@@ -172,8 +190,10 @@ export type SyncMetadata = typeof syncMetadata.$inferSelect;
 export type NewSyncMetadata = typeof syncMetadata.$inferInsert;
 export type QbSyncAlert = typeof qbSyncAlerts.$inferSelect;
 export type NewQbSyncAlert = typeof qbSyncAlerts.$inferInsert;
+export type PoAttachment = typeof poAttachments.$inferSelect;
+export type NewPoAttachment = typeof poAttachments.$inferInsert;
 
-export type ReportType = "daily_summary" | "morning_reminder" | "midday_report";
+export type ReportType = "daily_summary" | "morning_reminder" | "midday_report" | "sync_check";
 export type Category = "customer" | "vendor" | "other";
 export type ItemType = "po_sent" | "po_received" | "quote_request" | "general" | "other";
 export type TodoType = "po_unacknowledged" | "quote_unanswered" | "general_unanswered" | "vendor_followup";

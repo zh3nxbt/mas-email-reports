@@ -273,7 +273,7 @@ export async function generateDailySummary(options: ReportOptions = {}): Promise
 
   // Step 2: Categorize threads in the 12pm-4pm window
   console.log("\nStep 2: Categorizing threads (12pm-4pm)...");
-  let threads = await categorizeThreads(window);
+  let threads = await categorizeThreads(window, { reanalyze: options.reanalyze });
   console.log(`  Found ${threads.length} threads`);
 
   // Step 3: Enrich vendor threads with PO details
@@ -408,7 +408,7 @@ export async function generateMorningReminder(options: ReportOptions = {}): Prom
 
   // Step 2: Categorize overnight emails (4pm-7am)
   console.log("\nStep 2: Categorizing overnight emails...");
-  const overnightEmails = await categorizeThreads(window);
+  const overnightEmails = await categorizeThreads(window, { reanalyze: options.reanalyze });
   const emails = await fetchEmailsInWindow(window);
   const { received: overnightReceived, sent: overnightSent } = countEmailsByDirection(emails);
   console.log(`  Found ${overnightEmails.length} threads (${overnightReceived} received, ${overnightSent} sent)`);
@@ -539,7 +539,7 @@ export async function generateMiddayReport(options: ReportOptions = {}): Promise
 
   // Step 2: Categorize morning emails (7am-12pm)
   console.log("\nStep 2: Categorizing morning emails...");
-  const morningEmails = await categorizeThreads(window);
+  const morningEmails = await categorizeThreads(window, { reanalyze: options.reanalyze });
   const emails = await fetchEmailsInWindow(window);
   const { received: morningReceived, sent: morningSent } = countEmailsByDirection(emails);
   console.log(`  Found ${morningEmails.length} threads (${morningReceived} received, ${morningSent} sent)`);

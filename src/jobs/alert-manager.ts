@@ -9,14 +9,9 @@
  */
 
 import { db, schema } from "@/db";
-import { eq, and, lt, isNull, inArray } from "drizzle-orm";
+import { eq, and, lt, isNull, inArray, sql } from "drizzle-orm";
 import type { QbSyncAlert, NewQbSyncAlert, QbSyncAlertType } from "@/db/schema";
 import type { CategorizedThread, PoDetails } from "@/report/types.js";
-import { getExternalContact } from "@/report/categorizer.js";
-import {
-  getTrustedDomains,
-  isDomainTrusted,
-} from "@/quickbooks/trusted-domains.js";
 import { ConductorClient } from "@/quickbooks/conductor-client.js";
 import { createCustomerMatcher, type MatchResult } from "@/quickbooks/customer-matcher.js";
 import {
@@ -25,9 +20,21 @@ import {
   findMatchingEstimate,
 } from "@/quickbooks/job-documents.js";
 import { findSosShouldBeClosed } from "@/quickbooks/invoice-so-matcher.js";
-import { analyzeEmailPdfs } from "@/report/pdf-extractor.js";
 
 const ESCALATION_HOURS = 4;
+
+// Module-level cached matcher to avoid repeated API calls for customer list
+let cachedMatcher: ReturnType<typeof createCustomerMatcher> | null = null;
+let matcherClient: ConductorClient | null = null;
+
+function getOrCreateMatcher(client: ConductorClient): ReturnType<typeof createCustomerMatcher> {
+  if (cachedMatcher && matcherClient === client) {
+    return cachedMatcher;
+  }
+  cachedMatcher = createCustomerMatcher(client);
+  matcherClient = client;
+  return cachedMatcher;
+}
 
 export interface AlertSummary {
   newAlerts: QbSyncAlert[];
@@ -67,16 +74,13 @@ export async function analyzeNewPoEmails(
 
   const existingThreadKeys = new Set(existingAlerts.map((a) => a.threadKey));
 
-  // Load trusted domains once
-  const trustedDomains = await getTrustedDomains();
-
   // Initialize QB client and matcher
   let client: ConductorClient | null = null;
   let matcher: ReturnType<typeof createCustomerMatcher> | null = null;
 
   try {
     client = new ConductorClient();
-    matcher = createCustomerMatcher(client);
+    matcher = getOrCreateMatcher(client);
   } catch (error) {
     console.warn("QB client not available:", error);
   }
@@ -88,55 +92,31 @@ export async function analyzeNewPoEmails(
       continue;
     }
 
-    const contact = getExternalContact(thread.emails);
     const now = new Date();
 
-    // Base alert data
+    // Base alert data (use pre-populated contact info from thread)
     const baseAlert: Partial<NewQbSyncAlert> = {
       threadKey: thread.threadKey,
       subject: thread.subject,
-      contactEmail: contact.email,
-      contactName: contact.name,
+      contactEmail: thread.contactEmail,
+      contactName: thread.contactName,
       detectedAt: now,
       status: "open",
     };
 
-    // Check for suspicious domain
-    if (!contact.email) {
+    // Check for suspicious domain (already determined during categorization)
+    if (thread.isSuspicious) {
       const alert = await createAlert({
         ...baseAlert,
         alertType: "suspicious_po_email",
       } as NewQbSyncAlert);
       newAlerts.push(alert);
-      console.log(`Suspicious: no contact email for "${thread.subject?.slice(0, 40)}..."`);
+      console.log(`Suspicious: ${thread.contactEmail || "no email"} for "${thread.subject?.slice(0, 40)}..."`);
       continue;
     }
 
-    if (!isDomainTrusted(contact.email, trustedDomains)) {
-      const alert = await createAlert({
-        ...baseAlert,
-        alertType: "suspicious_po_email",
-      } as NewQbSyncAlert);
-      newAlerts.push(alert);
-      console.log(`Suspicious: untrusted domain ${contact.email}`);
-      continue;
-    }
-
-    // Extract PO details from PDF
-    let poDetails: PoDetails | null = null;
-    const emailWithPdf = thread.emails.find(
-      (e) => e.hasAttachments && e.attachments?.toLowerCase().includes("pdf")
-    );
-    if (emailWithPdf) {
-      try {
-        const pdfResults = await analyzeEmailPdfs(emailWithPdf.uid, emailWithPdf.mailbox);
-        if (pdfResults.length > 0) {
-          poDetails = pdfResults[0].details;
-        }
-      } catch (error) {
-        console.warn(`Failed to analyze PDF:`, error);
-      }
-    }
+    // Use pre-extracted PO details from categorization
+    const poDetails = thread.poDetails;
 
     // Update base alert with PO details
     if (poDetails) {
@@ -152,11 +132,11 @@ export async function analyzeNewPoEmails(
         alertType: "po_detected",
       } as NewQbSyncAlert);
       newAlerts.push(alert);
-      console.log(`PO detected (no QB): ${contact.email}`);
+      console.log(`PO detected (no QB): ${thread.contactEmail}`);
       continue;
     }
 
-    const matchResult = await matcher.match(contact.email, contact.name || undefined);
+    const matchResult = await matcher.match(thread.contactEmail!, thread.contactName || undefined);
 
     if (!matchResult) {
       const alert = await createAlert({
@@ -164,7 +144,7 @@ export async function analyzeNewPoEmails(
         alertType: "no_qb_customer",
       } as NewQbSyncAlert);
       newAlerts.push(alert);
-      console.log(`No QB customer match: ${contact.email}`);
+      console.log(`No QB customer match: ${thread.contactEmail}`);
       continue;
     }
 
@@ -193,7 +173,7 @@ export async function analyzeNewPoEmails(
           : null,
       } as NewQbSyncAlert);
       newAlerts.push(alert);
-      console.log(`PO with SO: ${contact.email} → SO ${matchingSO.refNumber}`);
+      console.log(`PO with SO: ${thread.contactEmail} → SO ${matchingSO.refNumber}`);
       continue;
     }
 
@@ -216,7 +196,7 @@ export async function analyzeNewPoEmails(
     } as NewQbSyncAlert);
     newAlerts.push(alert);
     console.log(
-      `PO detected (no SO): ${contact.email}${matchingEst ? ` (has estimate ${matchingEst.refNumber})` : ""}`
+      `PO detected (no SO): ${thread.contactEmail}${matchingEst ? ` (has estimate ${matchingEst.refNumber})` : ""}`
     );
   }
 
@@ -258,7 +238,26 @@ export async function checkEscalations(): Promise<QbSyncAlert[]> {
     client = new ConductorClient();
   } catch (error) {
     console.warn("QB client not available for escalation check:", error);
+    // Escalate all candidates without re-checking QB (conservative - better to alert than miss)
+    console.warn(`Escalating ${candidateAlerts.length} alerts without QB verification`);
+    for (const alert of candidateAlerts) {
+      const escalated = await escalateAlert(alert);
+      escalations.push(escalated);
+    }
     return escalations;
+  }
+
+  // Batch fetch documents by customer ID to avoid N+1 queries
+  const customerIds = [...new Set(
+    candidateAlerts
+      .map((a) => a.qbCustomerId)
+      .filter((id): id is string => id !== null)
+  )];
+
+  const allDocs = new Map<string, Awaited<ReturnType<typeof getCustomerJobDocuments>>>();
+  for (const customerId of customerIds) {
+    const docs = await getCustomerJobDocuments(client, customerId);
+    allDocs.set(customerId, docs);
   }
 
   for (const alert of candidateAlerts) {
@@ -269,8 +268,15 @@ export async function checkEscalations(): Promise<QbSyncAlert[]> {
       continue;
     }
 
-    // Re-check QB for matching SO
-    const docs = await getCustomerJobDocuments(client, alert.qbCustomerId);
+    // Use pre-fetched documents
+    const docs = allDocs.get(alert.qbCustomerId);
+    if (!docs) {
+      // Shouldn't happen, but escalate to be safe
+      const escalated = await escalateAlert(alert);
+      escalations.push(escalated);
+      continue;
+    }
+
     const matchingSO = findMatchingSalesOrder(
       docs,
       alert.poNumber || undefined,
@@ -428,7 +434,7 @@ export async function checkAndResolveAlerts(): Promise<QbSyncAlert[]> {
       )
     );
 
-  const matcher = createCustomerMatcher(client);
+  const matcher = getOrCreateMatcher(client);
 
   for (const alert of noCustomerAlerts) {
     if (!alert.contactEmail) continue;
@@ -510,16 +516,9 @@ export async function markAlertsNotified(alertIds: number[]): Promise<void> {
     .update(schema.qbSyncAlerts)
     .set({
       lastNotifiedAt: now,
-      notificationCount: schema.qbSyncAlerts.notificationCount,
+      notificationCount: sql`${schema.qbSyncAlerts.notificationCount} + 1`,
     })
     .where(inArray(schema.qbSyncAlerts.id, alertIds));
-
-  // Increment notification count separately
-  for (const id of alertIds) {
-    await db.execute(
-      `UPDATE qb_sync_alerts SET notification_count = notification_count + 1 WHERE id = ${id}`
-    );
-  }
 }
 
 /**
@@ -530,25 +529,46 @@ export async function runFullAlertCheck(
 ): Promise<AlertSummary> {
   console.log("\n=== Running QB Sync Alert Check ===\n");
 
+  let newAlerts: QbSyncAlert[] = [];
+  let escalations: QbSyncAlert[] = [];
+  let resolved: QbSyncAlert[] = [];
+  let soAlerts: QbSyncAlert[] = [];
+
   // Stage 1: Analyze new PO emails
-  console.log("Stage 1: Analyzing new PO emails...");
-  const newAlerts = await analyzeNewPoEmails(poReceivedThreads);
-  console.log(`  Created ${newAlerts.length} new alerts`);
+  try {
+    console.log("Stage 1: Analyzing new PO emails...");
+    newAlerts = await analyzeNewPoEmails(poReceivedThreads);
+    console.log(`  Created ${newAlerts.length} new alerts`);
+  } catch (error) {
+    console.error("Stage 1 failed:", error);
+  }
 
   // Stage 2: Check for escalations
-  console.log("\nStage 2: Checking for escalations...");
-  const escalations = await checkEscalations();
-  console.log(`  Escalated ${escalations.length} alerts`);
+  try {
+    console.log("\nStage 2: Checking for escalations...");
+    escalations = await checkEscalations();
+    console.log(`  Escalated ${escalations.length} alerts`);
+  } catch (error) {
+    console.error("Stage 2 failed:", error);
+  }
 
-  // Check for auto-resolution
-  console.log("\nChecking for auto-resolution...");
-  const resolved = await checkAndResolveAlerts();
-  console.log(`  Resolved ${resolved.length} alerts`);
+  // Stage 3: Check for auto-resolution
+  try {
+    console.log("\nChecking for auto-resolution...");
+    resolved = await checkAndResolveAlerts();
+    console.log(`  Resolved ${resolved.length} alerts`);
+  } catch (error) {
+    console.error("Stage 3 failed:", error);
+  }
 
-  // Check for SO/Invoice mismatches
-  console.log("\nChecking for SO/Invoice mismatches...");
-  const soAlerts = await checkInvoiceSoMismatch();
-  console.log(`  Found ${soAlerts.length} SOs that should be closed`);
+  // Stage 4: Check for SO/Invoice mismatches
+  try {
+    console.log("\nChecking for SO/Invoice mismatches...");
+    soAlerts = await checkInvoiceSoMismatch();
+    console.log(`  Found ${soAlerts.length} SOs that should be closed`);
+  } catch (error) {
+    console.error("Stage 4 failed:", error);
+  }
 
   // Get all open alerts
   const openAlerts = await getOpenAlerts();

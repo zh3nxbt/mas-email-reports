@@ -1,9 +1,11 @@
 import { db, schema } from "@/db";
-import { and, gte, lte } from "drizzle-orm";
-import type { Email, Category, ItemType } from "@/db/schema";
+import { and, gte, lte, inArray, desc } from "drizzle-orm";
+import type { Email, Category, ItemType, ReportThread } from "@/db/schema";
 import { groupEmailsIntoThreads, normalizeSubject, fetchFullThreadEmails } from "@/sync/threader";
 import type { CategorizedThread, TimeWindow, EmailForPrompt } from "./types";
 import { categorizeThreadWithAI, categorizeThreadsBatch, type ThreadForBatch } from "./summarizer";
+import { getTrustedDomains, isDomainTrusted } from "@/quickbooks/trusted-domains";
+import { getOrAnalyzePoPdf } from "@/storage/po-attachment-manager";
 
 // Batch configuration
 const MAX_THREADS_PER_BATCH = 20;
@@ -190,8 +192,41 @@ export function prepareEmailsForPrompt(emails: Email[]): EmailForPrompt[] {
   }));
 }
 
+// Get cached categorizations from report_threads table
+async function getCachedCategorizations(threadKeys: string[]): Promise<Map<string, ReportThread>> {
+  if (threadKeys.length === 0) return new Map();
+
+  // Get the most recent categorization for each threadKey
+  const cached = await db
+    .select()
+    .from(schema.reportThreads)
+    .where(inArray(schema.reportThreads.threadKey, threadKeys))
+    .orderBy(desc(schema.reportThreads.id)); // Most recent first
+
+  // Keep only the most recent entry per threadKey
+  const result = new Map<string, ReportThread>();
+  for (const row of cached) {
+    if (!result.has(row.threadKey)) {
+      result.set(row.threadKey, row);
+    }
+  }
+
+  return result;
+}
+
+// Check if cached categorization is still valid (thread hasn't changed)
+function isCacheValid(cached: ReportThread, currentLastEmailDate: Date | null): boolean {
+  if (!cached.lastEmailDate || !currentLastEmailDate) return false;
+
+  // Cache is valid if lastEmailDate matches (no new emails)
+  return cached.lastEmailDate.getTime() === currentLastEmailDate.getTime();
+}
+
 // Categorize all threads in a time window
-export async function categorizeThreads(window: TimeWindow): Promise<CategorizedThread[]> {
+export async function categorizeThreads(
+  window: TimeWindow,
+  options: { reanalyze?: boolean } = {}
+): Promise<CategorizedThread[]> {
   // Fetch emails in window
   const windowEmails = await fetchEmailsInWindow(window);
   console.log(`Found ${windowEmails.length} emails in window`);
@@ -255,8 +290,54 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
     });
   }
 
-  // Attempt batch categorization
-  const aiResults = await categorizeThreadsWithBatch(threadsData);
+  // Check for cached categorizations (unless reanalyze is set)
+  const cachedResults = new Map<string, { category: Category; itemType: ItemType; contactName: string | null; summary: string; needsResponse: boolean; relatedTo: string | null }>();
+  let threadsToAnalyze = threadsData;
+
+  if (!options.reanalyze) {
+    const allThreadKeys = threadsData.map(t => t.threadKey);
+    const cachedCategorizations = await getCachedCategorizations(allThreadKeys);
+
+    const uncachedThreads: typeof threadsData = [];
+    let cacheHits = 0;
+
+    for (const data of threadsData) {
+      const cached = cachedCategorizations.get(data.threadKey);
+
+      if (cached && isCacheValid(cached, data.lastEmailDate)) {
+        // Use cached result
+        cachedResults.set(data.threadKey, {
+          category: cached.category,
+          itemType: cached.itemType,
+          contactName: cached.contactName,
+          summary: cached.summary || "",
+          needsResponse: !data.lastEmailFromUs, // Recalculate based on current state
+          relatedTo: null, // Can't preserve relatedTo from cache
+        });
+        cacheHits++;
+      } else {
+        // Need to analyze
+        uncachedThreads.push(data);
+      }
+    }
+
+    if (cacheHits > 0) {
+      console.log(`  Using cached categorizations for ${cacheHits} threads`);
+    }
+
+    threadsToAnalyze = uncachedThreads;
+  }
+
+  // Attempt batch categorization for uncached threads
+  let aiResults = new Map<string, { category: Category; itemType: ItemType; contactName: string | null; summary: string; needsResponse: boolean; relatedTo: string | null }>();
+
+  if (threadsToAnalyze.length > 0) {
+    console.log(`  Analyzing ${threadsToAnalyze.length} threads with AI...`);
+    aiResults = await categorizeThreadsWithBatch(threadsToAnalyze);
+  }
+
+  // Merge cached and AI results
+  const allResults = new Map([...cachedResults, ...aiResults]);
 
   // Build a map of threadKey to data for merging
   const dataByKey = new Map<string, typeof threadsData[0]>();
@@ -267,7 +348,7 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
   // Merge related threads based on AI suggestions
   const mergedInto = new Map<string, string>(); // threadKey -> merged into threadKey
 
-  for (const [threadKey, result] of aiResults) {
+  for (const [threadKey, result] of allResults) {
     if (result.relatedTo && dataByKey.has(result.relatedTo)) {
       // This thread should be merged into the related thread
       mergedInto.set(threadKey, result.relatedTo);
@@ -286,7 +367,7 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
 
     // First email in full thread history (oldest) - used for category decisions
     const firstEmail = data.threadEmails[0];
-    const aiResult = aiResults.get(data.threadKey);
+    const aiResult = allResults.get(data.threadKey);
 
     // Collect all FULL HISTORY emails including from merged threads (for AI decisions)
     let allEmails = [...data.threadEmails];
@@ -329,7 +410,7 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
       // But let's check if we need to update needsResponse based on merged thread
       const mergedResults = Array.from(mergedInto.entries())
         .filter(([_, target]) => target === data.threadKey)
-        .map(([key, _]) => aiResults.get(key))
+        .map(([key, _]) => allResults.get(key))
         .filter(Boolean);
 
       // If any merged thread has a more recent interaction, use that info
@@ -384,10 +465,66 @@ export async function categorizeThreads(window: TimeWindow): Promise<Categorized
       needsResponse,
       isNewThread: data.isNewThread,
       poDetails: null,
+      isSuspicious: false, // Will be set for po_received threads below
     });
   }
 
+  // Enrich po_received threads with trusted domain check and PO details
+  await enrichPoReceivedThreads(categorizedThreads);
+
   return categorizedThreads;
+}
+
+/**
+ * Enrich po_received threads with:
+ * 1. Trusted domain check (sets isSuspicious flag)
+ * 2. PO details extraction from PDF (if domain is trusted)
+ */
+async function enrichPoReceivedThreads(threads: CategorizedThread[]): Promise<void> {
+  const poReceivedThreads = threads.filter(t => t.itemType === "po_received");
+
+  if (poReceivedThreads.length === 0) {
+    return;
+  }
+
+  console.log(`\nEnriching ${poReceivedThreads.length} po_received threads...`);
+
+  // Load trusted domains once
+  const trustedDomains = await getTrustedDomains();
+
+  for (const thread of poReceivedThreads) {
+    // Check trusted domain
+    if (!thread.contactEmail) {
+      thread.isSuspicious = true;
+      console.log(`  Suspicious (no email): "${thread.subject?.slice(0, 40)}..."`);
+      continue;
+    }
+
+    if (!isDomainTrusted(thread.contactEmail, trustedDomains)) {
+      thread.isSuspicious = true;
+      console.log(`  Suspicious (untrusted domain): ${thread.contactEmail}`);
+      continue;
+    }
+
+    // Domain is trusted - extract PO details from PDF
+    const emailWithDoc = thread.emails.find((e) => {
+      if (!e.hasAttachments || !e.attachments) return false;
+      const lower = e.attachments.toLowerCase();
+      return lower.includes("pdf") || lower.includes(".doc");
+    });
+
+    if (emailWithDoc) {
+      try {
+        const result = await getOrAnalyzePoPdf(emailWithDoc, thread.threadKey);
+        if (result) {
+          thread.poDetails = result.details;
+          console.log(`  Extracted PO: ${result.details.poNumber || "(no number)"} $${result.details.total || "?"}`);
+        }
+      } catch (error) {
+        console.warn(`  Failed to analyze PDF for "${thread.subject?.slice(0, 40)}...":`, error);
+      }
+    }
+  }
 }
 
 // Batch categorization with fallback to individual calls

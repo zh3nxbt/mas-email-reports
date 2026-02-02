@@ -94,6 +94,7 @@ async function getRecentPoReceivedThreads(limit = 10): Promise<CategorizedThread
       needsResponse: !thread.lastEmailFromUs, // Assume needs response if last email not from us
       isNewThread: false,
       poDetails: thread.poDetails as PoDetails | null,
+      isSuspicious: false, // Test data assumes trusted
     });
   }
 

@@ -2,16 +2,19 @@
  * CLI Entry Point for QB Sync Alert Checks
  *
  * Usage:
- *   npm run jobs:check              # Hourly check + email
- *   npm run jobs:check --preview    # Show without sending
- *   npm run jobs:check --morning    # Morning review mode
+ *   npm run jobs:check                       # Hourly check + email
+ *   npm run jobs:check --preview             # Show without sending
+ *   npm run jobs:check --morning             # Morning review mode
+ *   npm run jobs:check --since=2025-01-01    # Historical check from date
  */
 
 import "dotenv/config";
 import { toZonedTime, fromZonedTime } from "date-fns-tz";
+import { and, eq } from "drizzle-orm";
+import { db, schema } from "@/db";
 import { syncEmails } from "@/sync/syncer";
 import { categorizeThreads } from "@/report/categorizer";
-import type { TimeWindow } from "@/report/types";
+import type { TimeWindow, CategorizedThread } from "@/report/types";
 import { sendReportEmail } from "@/report/email-sender";
 import {
   runFullAlertCheck,
@@ -30,13 +33,31 @@ const ALERT_RECIPIENT = process.env.ALERT_RECIPIENT || process.env.REPORT_RECIPI
 interface CliOptions {
   preview: boolean;
   morning: boolean;
+  since: Date | null;
+  reanalyze: boolean;
 }
 
 function parseArgs(): CliOptions {
   const args = process.argv.slice(2);
+
+  // Parse --since=YYYY-MM-DD
+  let since: Date | null = null;
+  const sinceArg = args.find((a) => a.startsWith("--since="));
+  if (sinceArg) {
+    const dateStr = sinceArg.split("=")[1];
+    // Add time to avoid timezone issues (noon EST)
+    since = new Date(`${dateStr}T12:00:00`);
+    if (isNaN(since.getTime())) {
+      console.error(`Invalid date format: ${dateStr}. Use YYYY-MM-DD`);
+      process.exit(1);
+    }
+  }
+
   return {
     preview: args.includes("--preview"),
     morning: args.includes("--morning"),
+    since,
+    reanalyze: args.includes("--reanalyze"),
   };
 }
 
@@ -45,13 +66,18 @@ function printUsage() {
 Usage: npm run jobs:check [options]
 
 Options:
-  --preview      Show alerts in console, don't send email
-  --morning      Morning review mode (full summary of all open alerts)
+  --preview           Show alerts in console, don't send email
+  --morning           Morning review mode (full summary of all open alerts)
+  --since=YYYY-MM-DD  Check all POs from specified date to today
+  --reanalyze         Force re-analysis of all threads (bypass cache)
 
 Examples:
-  npm run jobs:check                    # Run hourly check and send alert email
-  npm run jobs:check -- --preview       # Preview alerts in console
-  npm run jobs:check -- --morning       # Send morning review email
+  npm run jobs:check                         # Run hourly check and send alert email
+  npm run jobs:check -- --preview            # Preview alerts in console
+  npm run jobs:check -- --morning            # Send morning review email
+  npm run jobs:check -- --since=2025-01-01   # Check all POs from Jan 1 to today
+  npm run jobs:check -- --since=2025-01-01 --preview  # Preview historical check
+  npm run jobs:check -- --reanalyze          # Re-analyze all threads with AI
 `);
 }
 
@@ -83,6 +109,150 @@ function getOvernightWindow(): TimeWindow {
 }
 
 /**
+ * Save categorized threads to database for future reference
+ * Creates a "sync_check" report entry to link threads to
+ * Deduplicates: replaces existing sync_check for the same date
+ *
+ * Note: Uses window.start for the date intentionally - this groups
+ * historical checks by their start date for proper filtering
+ */
+async function saveCategorizedThreads(
+  threads: CategorizedThread[],
+  window: TimeWindow
+): Promise<number> {
+  const dateStr = window.start.toISOString().split("T")[0];
+
+  // DELETE existing sync_check for this date (prevents duplicates on re-run)
+  const existing = await db
+    .select({ id: schema.dailyReports.id })
+    .from(schema.dailyReports)
+    .where(
+      and(
+        eq(schema.dailyReports.reportDate, dateStr),
+        eq(schema.dailyReports.reportType, "sync_check")
+      )
+    );
+
+  if (existing.length > 0) {
+    console.log(`Replacing existing sync_check report for ${dateStr}`);
+    for (const old of existing) {
+      // report_threads will cascade delete due to FK constraint
+      await db.delete(schema.dailyReports).where(eq(schema.dailyReports.id, old.id));
+    }
+  }
+
+  // Create a minimal report entry to link threads
+  const [report] = await db
+    .insert(schema.dailyReports)
+    .values({
+      reportDate: dateStr,
+      reportType: "sync_check", // Dedicated type to avoid conflicts with daily reports
+      emailsReceived: threads.filter((t) => !t.lastEmailFromUs).length,
+      emailsSent: threads.filter((t) => t.lastEmailFromUs).length,
+      generatedAt: new Date(),
+      reportHtml: `<p>Historical sync check from ${window.start.toISOString()} to ${window.end.toISOString()}</p>`,
+    })
+    .returning({ id: schema.dailyReports.id });
+
+  // Save all threads
+  for (const thread of threads) {
+    await db.insert(schema.reportThreads).values({
+      reportId: report.id,
+      threadKey: thread.threadKey,
+      category: thread.category,
+      itemType: thread.itemType,
+      contactEmail: thread.contactEmail,
+      contactName: thread.contactName,
+      subject: thread.subject,
+      summary: thread.summary,
+      emailCount: thread.emailCount,
+      lastEmailDate: thread.lastEmailDate,
+    });
+  }
+
+  console.log(`Saved ${threads.length} categorized threads to report_threads (report ID: ${report.id})`);
+  return report.id;
+}
+
+/**
+ * Run historical check from a specific date
+ */
+async function runHistoricalCheck(options: CliOptions): Promise<void> {
+  const sinceDate = options.since!;
+  const now = new Date();
+
+  console.log("=== QB Sync Historical Check ===\n");
+  console.log(`Checking all POs from ${sinceDate.toLocaleDateString()} to today\n`);
+
+  // Sync emails (will skip duplicates automatically)
+  console.log("Syncing emails (skipping duplicates)...");
+  const syncResult = await syncEmails();
+  console.log(`Synced ${syncResult.emailsSynced} new emails\n`);
+
+  // Get all threads in the date range
+  const window: TimeWindow = { start: sinceDate, end: now };
+  console.log(`Analyzing threads from ${window.start.toISOString()} to ${window.end.toISOString()}\n`);
+
+  const threads = await categorizeThreads(window, { reanalyze: options.reanalyze });
+
+  // Save all categorized threads to database
+  await saveCategorizedThreads(threads, window);
+
+  const poReceivedThreads = threads.filter((t) => t.itemType === "po_received");
+  console.log(`Found ${poReceivedThreads.length} po_received threads in date range\n`);
+
+  if (poReceivedThreads.length === 0) {
+    console.log("No PO emails found in the specified date range.");
+    return;
+  }
+
+  // Run full alert check on all POs
+  const result = await runFullAlertCheck(poReceivedThreads);
+
+  console.log("\n=== Historical Check Summary ===");
+  console.log(`Total POs analyzed: ${poReceivedThreads.length}`);
+  console.log(`New alerts created: ${result.newAlerts.length}`);
+  console.log(`Escalations: ${result.escalations.length}`);
+  console.log(`Auto-resolved: ${result.resolved.length}`);
+  console.log(`Total open alerts: ${result.openAlerts.length}`);
+
+  // Get full summary for the report
+  const summary = await getOpenAlertsSummary();
+
+  if (options.preview) {
+    // Print detailed summary to console
+    console.log("\n" + generatePlainTextSummary(summary));
+  } else {
+    // Send comprehensive email report
+    const html = generateMorningReviewHtml(summary);
+    const dateRange = `${sinceDate.toLocaleDateString("en-US", {
+      timeZone: TIMEZONE,
+      month: "short",
+      day: "numeric",
+    })} - ${now.toLocaleDateString("en-US", {
+      timeZone: TIMEZONE,
+      month: "short",
+      day: "numeric",
+    })}`;
+
+    const subject = `QB Sync Report - ${dateRange} (${poReceivedThreads.length} POs)`;
+    await sendReportEmail(subject, html, ALERT_RECIPIENT);
+
+    // Mark all alerts as notified
+    const alertIds = [
+      ...summary.poDetected.map((a) => a.id),
+      ...summary.poMissingSo.map((a) => a.id),
+      ...summary.noQbCustomer.map((a) => a.id),
+      ...summary.suspiciousEmail.map((a) => a.id),
+      ...summary.soShouldBeClosed.map((a) => a.id),
+    ];
+    await markAlertsNotified(alertIds);
+
+    console.log(`\nHistorical report email sent to ${ALERT_RECIPIENT}`);
+  }
+}
+
+/**
  * Run hourly alert check
  */
 async function runHourlyCheck(options: CliOptions): Promise<void> {
@@ -97,7 +267,7 @@ async function runHourlyCheck(options: CliOptions): Promise<void> {
   const window = getHourlyWindow();
   console.log(`Checking emails from ${window.start.toISOString()} to ${window.end.toISOString()}\n`);
 
-  const threads = await categorizeThreads(window);
+  const threads = await categorizeThreads(window, { reanalyze: options.reanalyze });
   const poReceivedThreads = threads.filter((t) => t.itemType === "po_received");
   console.log(`Found ${poReceivedThreads.length} po_received threads\n`);
 
@@ -170,7 +340,7 @@ async function runMorningReview(options: CliOptions): Promise<void> {
   const window = getOvernightWindow();
   console.log(`Checking emails from ${window.start.toISOString()} to ${window.end.toISOString()}\n`);
 
-  const threads = await categorizeThreads(window);
+  const threads = await categorizeThreads(window, { reanalyze: options.reanalyze });
   const poReceivedThreads = threads.filter((t) => t.itemType === "po_received");
   console.log(`Found ${poReceivedThreads.length} po_received threads\n`);
 
@@ -236,7 +406,9 @@ async function main() {
   const options = parseArgs();
 
   try {
-    if (options.morning) {
+    if (options.since) {
+      await runHistoricalCheck(options);
+    } else if (options.morning) {
       await runMorningReview(options);
     } else {
       await runHourlyCheck(options);

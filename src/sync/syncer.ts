@@ -9,8 +9,8 @@ import type { NewEmail } from "@/db/schema";
 
 const MAILBOXES = ["INBOX", "Sent", "Sent Messages"];
 // Initial sync date - only used on first run
-// Jan 26, 2026 00:00 EST = Jan 26, 2026 05:00 UTC
-const INITIAL_SYNC_DATE = new Date("2026-01-26T05:00:00.000Z");
+// Jan 1, 2026 00:00 EST = Jan 1, 2026 05:00 UTC
+const INITIAL_SYNC_DATE = new Date("2026-01-01T05:00:00.000Z");
 // Buffer days to overlap when doing incremental sync (IMAP SINCE is date-only)
 const SYNC_OVERLAP_DAYS = 1;
 

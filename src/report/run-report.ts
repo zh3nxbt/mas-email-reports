@@ -9,6 +9,7 @@ function parseArgs(): { morning: boolean; midday: boolean; options: ReportOption
   const midday = args.includes("--midday");
   const preview = args.includes("--preview");
   const skipEmail = args.includes("--skip-email");
+  const reanalyze = args.includes("--reanalyze");
 
   let date: Date | undefined;
   const dateArg = args.find((arg) => arg.startsWith("--date="));
@@ -24,7 +25,7 @@ function parseArgs(): { morning: boolean; midday: boolean; options: ReportOption
   return {
     morning,
     midday,
-    options: { date, preview, skipEmail },
+    options: { date, preview, skipEmail, reanalyze },
   };
 }
 
@@ -37,6 +38,7 @@ Options:
   --midday       Generate 12pm midday report instead of 4pm daily summary
   --preview      Output to console, don't save or email
   --skip-email   Save to database but don't send email
+  --reanalyze    Force re-analysis of all threads (bypass cache)
   --date=YYYY-MM-DD  Generate report for a specific date
 
 Examples:
@@ -45,6 +47,7 @@ Examples:
   npm run report -- --morning       # Generate and send 7am morning reminder
   npm run report -- --midday        # Generate and send 12pm midday report
   npm run report -- --date=2024-01-15 --preview   # Preview historical report
+  npm run report -- --reanalyze     # Re-analyze all threads with AI (after prompt changes)
 `);
 }
 
