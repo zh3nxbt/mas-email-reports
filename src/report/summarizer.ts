@@ -140,9 +140,8 @@ CLASSIFICATION:
    - "other": Automated/newsletters
 
 3. NEEDS_RESPONSE - Does the LAST email need our reply?
-   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", "Will do", "Received", FYI, notices, vendor quote deliveries
+   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", receipts, order confirmations, FYI, notices, vendor quote deliveries
    TRUE for: Questions needing our answer (e.g., "what thickness?", "can you send STEP file?")
-   NOTE: Generic "let us know if you have questions" = FALSE (not a real question)
 
 4. CONTACT_NAME - External party's name/company
 
@@ -318,9 +317,8 @@ CLASSIFICATION:
    - "other": Automated/newsletters
 
 3. NEEDS_RESPONSE - Does the LAST email need our reply?
-   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", "Will do", "Received", FYI, notices, vendor quotation deliveries
+   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", receipts, order confirmations, FYI, notices, vendor quote deliveries
    TRUE for: Questions needing our answer (e.g., "what thickness?", "can you send STEP file?")
-   NOTE: Generic "let us know if you have questions" = FALSE (not a real question)
 
 4. CONTACT_NAME - External party's name/company
 
