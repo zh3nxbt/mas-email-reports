@@ -1,5 +1,13 @@
 # Claude Code Instructions
 
+## Codebase Overview
+
+Email sync and report generation system for MAS Precision Parts. 3-stage pipeline: IMAP sync → AI categorization → HTML reports + QuickBooks alerts.
+
+**Stack**: Next.js 15, PostgreSQL (Drizzle ORM), Claude Sonnet, Conductor.is (QB)
+
+For detailed architecture, module guide, and data flows, see [devDocs/CODEBASE_MAP.md](devDocs/CODEBASE_MAP.md).
+
 ## Project Overview
 
 Email sync and **daily report generation system** for **MAS Precision Parts** - a precision parts manufacturing company. Syncs emails via IMAP, categorizes into threads, and generates scheduled reports:
