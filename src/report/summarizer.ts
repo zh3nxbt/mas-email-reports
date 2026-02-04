@@ -140,15 +140,9 @@ CLASSIFICATION:
    - "other": Automated/newsletters
 
 3. NEEDS_RESPONSE - Does the LAST email need our reply?
-   Set FALSE for:
-   - Acknowledgments ("Thanks!", "Got it!", "Received!")
-   - FYI notices, policy statements, announcements
-   - Emails with "notice" in subject (price notices, policy notices, etc.)
-   - Informational emails that don't ask a question or request action
-   - Vendor quotation/quote deliveries with generic "let us know if you need anything" (not a real question)
-   - Generic courtesy phrases like "please advise if you have questions"
-   Set TRUE for: SPECIFIC questions requiring our answer (e.g., "what is the thickness?", "can you send the STEP file?")
-   IMPORTANT: Vendor delivering a quotation = FALSE (we decide internally whether to order, no reply needed)
+   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", "Will do", "Received", FYI, notices, vendor quote deliveries
+   TRUE for: Questions needing our answer (e.g., "what thickness?", "can you send STEP file?")
+   NOTE: Generic "let us know if you have questions" = FALSE (not a real question)
 
 4. CONTACT_NAME - External party's name/company
 
@@ -324,9 +318,9 @@ CLASSIFICATION:
    - "other": Automated/newsletters
 
 3. NEEDS_RESPONSE - Does the LAST email need our reply?
-   FALSE for: acknowledgments, FYI notices, policy statements, "notice" emails, vendor quotation deliveries
-   TRUE for: SPECIFIC questions requiring our answer (e.g., "what thickness?", "send STEP file?")
-   IMPORTANT: Vendor delivering quotation with generic "let us know" = FALSE (not a real question)
+   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", "Will do", "Received", FYI, notices, vendor quotation deliveries
+   TRUE for: Questions needing our answer (e.g., "what thickness?", "can you send STEP file?")
+   NOTE: Generic "let us know if you have questions" = FALSE (not a real question)
 
 4. CONTACT_NAME - External party's name/company
 
