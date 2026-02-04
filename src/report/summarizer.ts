@@ -133,14 +133,15 @@ CLASSIFICATION:
    - "other": Automated emails, newsletters, spam, internal
 
 2. ITEM_TYPE - What kind of interaction?
-   - "po_received": Customer sent us a purchase order
+   - "po_received": Customer sent us a PURCHASE ORDER (PO) - commitment to buy with PO number
    - "po_sent": We sent a PO to vendor
-   - "quote_request": Customer asking US for a quote/pricing (NOT when we ask vendors)
-   - "general": General correspondence
+   - "quote_request": Customer asking for quote/pricing/RFQ (NOT a PO - just asking for price)
+   - "general": General correspondence, confirmations, receipts, payment advice
    - "other": Automated/newsletters
+   NOTE: "RFQ" = Request For Quote = quote_request, NOT po_received
 
 3. NEEDS_RESPONSE - Does the LAST email need our reply?
-   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", receipts, order confirmations, FYI, notices, vendor quote deliveries
+   FALSE for: "Thanks", "Thank you", "Got it", receipts, order confirmations, shipping notices, payment advice, invoices FROM vendors, automated notifications
    TRUE for: Questions needing our answer (e.g., "what thickness?", "can you send STEP file?")
 
 4. CONTACT_NAME - External party's name/company
@@ -310,14 +311,15 @@ CLASSIFICATION:
    - "other": Automated emails, newsletters, spam
 
 2. ITEM_TYPE - What kind of interaction?
-   - "po_received": Customer sent us a purchase order
+   - "po_received": Customer sent us a PURCHASE ORDER (PO) - commitment to buy with PO number
    - "po_sent": We sent a PO to vendor
-   - "quote_request": Customer asking US for a quote/pricing (NOT when we ask vendors)
-   - "general": General correspondence
+   - "quote_request": Customer asking for quote/pricing/RFQ (NOT a PO - just asking for price)
+   - "general": General correspondence, confirmations, receipts, payment advice
    - "other": Automated/newsletters
+   NOTE: "RFQ" = Request For Quote = quote_request, NOT po_received
 
 3. NEEDS_RESPONSE - Does the LAST email need our reply?
-   FALSE for: "Thanks", "Thank you", "Got it", "Perfect", "Sounds good", receipts, order confirmations, FYI, notices, vendor quote deliveries
+   FALSE for: "Thanks", "Thank you", "Got it", receipts, order confirmations, shipping notices, payment advice, invoices FROM vendors, automated notifications
    TRUE for: Questions needing our answer (e.g., "what thickness?", "can you send STEP file?")
 
 4. CONTACT_NAME - External party's name/company
