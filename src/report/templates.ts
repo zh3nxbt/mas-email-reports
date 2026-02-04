@@ -3,229 +3,25 @@ import type { MiddayReportData } from "./generator";
 import { getTodoPriority } from "./todo-analyzer";
 import { formatPoDetailsDisplay } from "./po-detector";
 
-// Styles shared across templates
+// Outlook-compatible styles (minimal - most styling is inline)
+// Outlook uses Word's rendering engine which doesn't support:
+// - display: flex/none, border-radius, opacity, gap
+// - CSS classes are often ignored
+// Using tables for layout and inline styles for everything
 const styles = `
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    font-family: Arial, Helvetica, sans-serif;
     line-height: 1.5;
-    color: #333;
-    max-width: 700px;
-    margin: 0 auto;
+    color: #333333;
+    margin: 0;
     padding: 16px;
     background-color: #f5f5f5;
   }
-  .container {
-    background-color: white;
-    border-radius: 8px;
-    padding: 20px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+  table {
+    border-collapse: collapse;
   }
-  h1 {
-    color: #1a1a1a;
-    margin-top: 0;
-    font-size: 20px;
-    margin-bottom: 16px;
-  }
-  h2 {
-    color: #666;
-    font-size: 13px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-top: 20px;
-    margin-bottom: 10px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid #e0e0e0;
-  }
-  .section {
-    margin-bottom: 20px;
-  }
-  .section-action-items {
-    background-color: #fef3c7;
-    border: 1px solid #f59e0b;
-    border-radius: 8px;
-    padding: 16px;
-    margin-bottom: 24px;
-  }
-  .section-action-items h2 {
-    color: #92400e;
-    margin-top: 0;
-    border-bottom-color: #f59e0b;
-  }
-  .section-summaries {
-    background-color: #f9fafb;
-    border-radius: 8px;
-    padding: 16px;
-  }
-  .section-summaries h2 {
-    margin-top: 0;
-  }
-  .section-summaries h2:not(:first-child) {
-    margin-top: 20px;
-  }
-  .thread-item {
-    display: flex;
-    gap: 12px;
-    padding: 10px 0;
-    border-bottom: 1px solid #f0f0f0;
-  }
-  .thread-item:last-child {
-    border-bottom: none;
-  }
-  .thread-label {
-    flex-shrink: 0;
-    width: 70px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    color: #6b7280;
-    padding-top: 2px;
-  }
-  .thread-label.po { color: #059669; }
-  .thread-label.po-sent { color: #7c3aed; }
-  .thread-label.rfq { color: #2563eb; }
-  .po-warning {
-    display: inline-block;
-    background-color: #fef3c7;
-    border: 1px solid #f59e0b;
-    color: #92400e;
-    font-size: 10px;
-    font-weight: 500;
-    padding: 2px 6px;
-    border-radius: 4px;
-    margin-left: 8px;
-  }
-  .po-details {
-    display: inline-block;
-    background-color: #d1fae5;
-    color: #065f46;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 2px 6px;
-    border-radius: 4px;
-    margin-left: 8px;
-  }
-  .thread-content {
-    flex: 1;
-    min-width: 0;
-  }
-  .thread-subject {
-    font-weight: 500;
-    color: #1a1a1a;
-    font-size: 14px;
-    margin-bottom: 2px;
-  }
-  .email-count {
-    display: inline-block;
-    background-color: #e5e7eb;
-    color: #6b7280;
-    font-size: 11px;
-    font-weight: 500;
-    padding: 1px 6px;
-    border-radius: 10px;
-    margin-left: 6px;
-  }
-  .thread-from {
-    font-size: 13px;
-    color: #666;
-    margin-bottom: 4px;
-  }
-  .thread-summary {
-    font-size: 13px;
-    color: #888;
-  }
-  .todo-item {
-    display: flex;
-    gap: 12px;
-    padding: 10px 0;
-    border-bottom: 1px solid #f0f0f0;
-  }
-  .todo-item:last-child {
-    border-bottom: none;
-  }
-  .todo-label {
-    flex-shrink: 0;
-    width: 120px;
-    font-size: 10px;
-    font-weight: 600;
-    text-transform: uppercase;
-    padding-top: 2px;
-  }
-  .todo-label.urgent { color: #dc2626; }
-  .todo-label.pending { color: #d97706; }
-  .todo-content {
-    flex: 1;
-    min-width: 0;
-  }
-  .todo-resolved {
-    opacity: 0.6;
-  }
-  .todo-resolved .todo-subject,
-  .todo-resolved .todo-from,
-  .todo-resolved .todo-summary {
-    text-decoration: line-through;
-  }
-  .todo-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 2px;
-  }
-  .todo-complete-btn {
-    display: none;
-    background-color: #f3f4f6;
-    border: 1px solid #d1d5db;
-    border-radius: 4px;
-    padding: 4px 8px;
-    font-size: 11px;
-    color: #374151;
-    cursor: pointer;
-    flex-shrink: 0;
-    transition: all 0.15s ease;
-  }
-  .todo-complete-btn:hover {
-    background-color: #e5e7eb;
-    border-color: #9ca3af;
-  }
-  .todo-complete-btn.completed {
-    background-color: #dcfce7;
-    border-color: #86efac;
-    color: #166534;
-    cursor: default;
-  }
-  .todo-subject {
-    font-weight: 500;
-    font-size: 14px;
-    flex: 1;
-  }
-  .todo-from {
-    font-size: 13px;
-    color: #666;
-    margin-bottom: 4px;
-  }
-  .todo-summary {
-    font-size: 13px;
-    color: #888;
-  }
-  .resolved-tag {
-    font-size: 11px;
-    color: #16a34a;
-    font-weight: 500;
-    margin-left: 8px;
-  }
-  .empty-state {
-    color: #999;
-    font-size: 13px;
-    padding: 12px 0;
-  }
-  .footer {
-    margin-top: 20px;
-    padding-top: 12px;
-    border-top: 1px solid #e0e0e0;
-    font-size: 11px;
-    color: #999;
-    text-align: center;
+  h1, h2, h3 {
+    margin: 0;
   }
 `;
 
@@ -283,7 +79,6 @@ function renderThread(thread: CategorizedThread): string {
   let poInfo = "";
   if (thread.itemType === "po_received") {
     if (thread.poDetails) {
-      // Show extracted PO info
       const poNumber = thread.poDetails.poNumber || "";
       const poTotal = thread.poDetails.total
         ? `$${thread.poDetails.total.toLocaleString()}`
@@ -292,29 +87,37 @@ function renderThread(thread: CategorizedThread): string {
         ? `${poNumber} · ${poTotal}`
         : poNumber || poTotal || "";
       if (poDisplay) {
-        poInfo = `<span class="po-details" style="background-color: #d1fae5; color: #065f46; font-size: 11px; font-weight: 500; padding: 2px 6px; border-radius: 4px; margin-left: 8px;">${escapeHtml(poDisplay)}</span>`;
+        poInfo = ` <span style="background-color: #d1fae5; color: #065f46; font-size: 11px; font-weight: bold; padding: 2px 6px;">[${escapeHtml(poDisplay)}]</span>`;
       }
     } else if (!thread.isSuspicious) {
-      // No PO details and not suspicious - might need review
-      poInfo = `<span class="po-warning" style="background-color: #fef3c7; border: 1px solid #f59e0b; color: #92400e; font-size: 10px; font-weight: 500; padding: 2px 6px; border-radius: 4px; margin-left: 8px;">Needs Review</span>`;
+      poInfo = ` <span style="background-color: #fef3c7; color: #92400e; font-size: 10px; font-weight: bold; padding: 2px 6px;">[Needs Review]</span>`;
     }
   }
 
   // For suspicious threads, show warning
   let suspiciousWarning = "";
   if (thread.isSuspicious) {
-    suspiciousWarning = `<span style="background-color: #fee2e2; border: 1px solid #f87171; color: #991b1b; font-size: 10px; font-weight: 500; padding: 2px 6px; border-radius: 4px; margin-left: 8px;">Untrusted Domain</span>`;
+    suspiciousWarning = ` <span style="background-color: #fee2e2; color: #991b1b; font-size: 10px; font-weight: bold; padding: 2px 6px;">[Untrusted Domain]</span>`;
   }
 
+  // Use table layout for Outlook compatibility
   return `
-    <div class="thread-item">
-      <div class="thread-label ${label.class}" style="color: ${label.color};">${label.text}</div>
-      <div class="thread-content">
-        <div class="thread-subject">${escapeHtml(thread.subject)}<span class="email-count">${thread.emailCount}</span>${poInfo}${suspiciousWarning}</div>
-        <div class="thread-from">${escapeHtml(thread.contactName || thread.contactEmail || "Unknown")}${timestamp ? ` <span style="color: #9ca3af; font-size: 12px;">· ${timestamp}</span>` : ""}</div>
-        ${thread.summary ? `<div class="thread-summary">${escapeHtml(thread.summary)}</div>` : ""}
-      </div>
-    </div>
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom: 1px solid #f0f0f0; margin-bottom: 8px;">
+      <tr>
+        <td width="80" valign="top" style="padding: 8px 12px 8px 0; font-size: 10px; font-weight: bold; text-transform: uppercase; color: ${label.color};">
+          ${label.text}
+        </td>
+        <td valign="top" style="padding: 8px 0;">
+          <div style="font-weight: bold; color: #1a1a1a; font-size: 14px; margin-bottom: 2px;">
+            ${escapeHtml(thread.subject)} <span style="background-color: #e5e7eb; color: #6b7280; font-size: 11px; font-weight: bold; padding: 1px 6px;">${thread.emailCount}</span>${poInfo}${suspiciousWarning}
+          </div>
+          <div style="font-size: 13px; color: #666666; margin-bottom: 4px;">
+            ${escapeHtml(thread.contactName || thread.contactEmail || "Unknown")}${timestamp ? ` <span style="color: #9ca3af; font-size: 12px;">· ${timestamp}</span>` : ""}
+          </div>
+          ${thread.summary ? `<div style="font-size: 13px; color: #888888;">${escapeHtml(thread.summary)}</div>` : ""}
+        </td>
+      </tr>
+    </table>
   `;
 }
 
@@ -334,30 +137,29 @@ function getTodoLabel(todoType: string): { text: string; class: string } {
 }
 
 function renderDisplayTodo(todo: DisplayTodo): string {
-  const age = todo.originalDate ? Math.floor((Date.now() - todo.originalDate.getTime()) / (1000 * 60 * 60 * 24)) : 0;
-  const priority = getTodoPriority(todo.todoType, age);
   const label = getTodoLabel(todo.todoType);
-  const labelColor = label.class === "urgent" ? "#dc2626" : "#d97706";
+  const labelColor = todo.resolved ? "#888888" : (label.class === "urgent" ? "#dc2626" : "#d97706");
   const timestamp = formatTimestamp(todo.originalDate);
+  const textStyle = todo.resolved ? "text-decoration: line-through; color: #888888;" : "";
 
+  // Use table layout for Outlook compatibility - no buttons (they don't work in email)
   return `
-    <div class="todo-item ${todo.resolved ? "todo-resolved" : ""}" data-thread-key="${escapeHtml(todo.threadKey)}">
-      <div class="todo-label" style="${todo.resolved ? "" : `color: ${labelColor};`}">${label.text}</div>
-      <div class="todo-content">
-        <div class="todo-header">
-          <div class="todo-subject">
-            ${escapeHtml(todo.subject)}
-            ${todo.resolved ? '<span class="resolved-tag">resolved</span>' : ""}
+    <table width="100%" cellpadding="0" cellspacing="0" style="border-bottom: 1px solid #f0f0f0; margin-bottom: 8px;">
+      <tr>
+        <td width="130" valign="top" style="padding: 8px 12px 8px 0; font-size: 10px; font-weight: bold; text-transform: uppercase; color: ${labelColor};">
+          ${label.text}${todo.resolved ? ' <span style="color: #16a34a;">✓</span>' : ""}
+        </td>
+        <td valign="top" style="padding: 8px 0;">
+          <div style="font-weight: bold; font-size: 14px; margin-bottom: 2px; ${textStyle}">
+            ${escapeHtml(todo.subject)}${todo.resolved ? ' <span style="color: #16a34a; font-size: 11px; font-weight: bold;">(resolved)</span>' : ""}
           </div>
-          ${todo.resolved
-            ? '<button class="todo-complete-btn completed" disabled>Completed</button>'
-            : `<button class="todo-complete-btn" data-thread-key="${escapeHtml(todo.threadKey)}">Mark Complete</button>`
-          }
-        </div>
-        <div class="todo-from">${escapeHtml(todo.contactName || todo.contactEmail || "Unknown")}${timestamp ? ` · ${timestamp}` : ""}</div>
-        ${todo.description ? `<div class="todo-summary">${escapeHtml(todo.description)}</div>` : ""}
-      </div>
-    </div>
+          <div style="font-size: 13px; color: #666666; margin-bottom: 4px; ${textStyle}">
+            ${escapeHtml(todo.contactName || todo.contactEmail || "Unknown")}${timestamp ? ` · ${timestamp}` : ""}
+          </div>
+          ${todo.description ? `<div style="font-size: 13px; color: #888888; ${textStyle}">${escapeHtml(todo.description)}</div>` : ""}
+        </td>
+      </tr>
+    </table>
   `;
 }
 
@@ -389,8 +191,8 @@ function renderThreadSection(
   const sorted = sortThreadsByItemType(threads);
 
   return `
-    <div class="section">
-      <h2>${title} (${threads.length})</h2>
+    <div style="margin-bottom: 20px;">
+      <h2 style="color: #666666; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 1px solid #e0e0e0;">${title} (${threads.length})</h2>
       ${sorted.map(renderThread).join("")}
     </div>
   `;
@@ -456,31 +258,43 @@ export function generateDailySummaryHtml(
   <title>Email Report - ${dateStr}</title>
   <style>${styles}</style>
 </head>
-<body>
-  <div class="container">
-    <h1>${dateStr} - Daily Summary</h1>
-    <div style="font-size: 13px; color: #666; margin-bottom: 16px;">
-      12pm – 4pm · ${received} received, ${sent} sent
-    </div>
+<body style="font-family: Arial, Helvetica, sans-serif; line-height: 1.5; color: #333333; margin: 0; padding: 16px; background-color: #f5f5f5;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 700px; margin: 0 auto;">
+    <tr>
+      <td style="background-color: #ffffff; padding: 20px;">
+        <h1 style="color: #1a1a1a; margin: 0 0 16px 0; font-size: 20px;">${dateStr} - Daily Summary</h1>
+        <div style="font-size: 13px; color: #666666; margin-bottom: 16px;">
+          12pm – 4pm · ${received} received, ${sent} sent
+        </div>
 
-    ${sortedTodos.length > 0 ? `
-    <div class="section-action-items">
-      <h2>Action Items (${sortedTodos.filter(t => !t.resolved).length})</h2>
-      ${sortedTodos.map(renderDisplayTodo).join("")}
-    </div>
-    ` : ""}
+        ${sortedTodos.length > 0 ? `
+        <table width="100%" cellpadding="16" cellspacing="0" style="background-color: #fef3c7; border: 1px solid #f59e0b; margin-bottom: 24px;">
+          <tr>
+            <td>
+              <h2 style="color: #92400e; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 1px solid #f59e0b;">Action Items (${sortedTodos.filter(t => !t.resolved).length})</h2>
+              ${sortedTodos.map(renderDisplayTodo).join("")}
+            </td>
+          </tr>
+        </table>
+        ` : ""}
 
-    <div class="section-summaries">
-      ${renderThreadSection("Customers", customerThreads)}
-      ${renderThreadSection("Vendors", vendorThreads)}
-    </div>
+        <table width="100%" cellpadding="16" cellspacing="0" style="background-color: #f9fafb;">
+          <tr>
+            <td>
+              ${renderThreadSection("Customers", customerThreads)}
+              ${renderThreadSection("Vendors", vendorThreads)}
+            </td>
+          </tr>
+        </table>
 
-    ${ignoredNote}
+        ${ignoredNote}
 
-    <div class="footer">
-      12pm – 4pm · ${received} received, ${sent} sent
-    </div>
-  </div>
+        <div style="margin-top: 20px; padding-top: 12px; border-top: 1px solid #e0e0e0; font-size: 11px; color: #999999; text-align: center;">
+          12pm – 4pm · ${received} received, ${sent} sent
+        </div>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>
   `;
@@ -497,6 +311,18 @@ export function generateMorningReminderHtml(data: MorningReportData, reportDate:
 
   const unresolvedTodos = data.pendingTodos.filter(t => !t.resolved);
 
+  // Convert pendingTodos to DisplayTodo format for renderDisplayTodo
+  const displayTodos: DisplayTodo[] = data.pendingTodos.map(t => ({
+    threadKey: t.threadKey,
+    todoType: t.todoType,
+    description: t.description || "",
+    contactEmail: t.contactEmail,
+    contactName: t.contactName,
+    originalDate: t.originalDate,
+    subject: t.subject || "",
+    resolved: t.resolved || false,
+  }));
+
   return `
 <!DOCTYPE html>
 <html>
@@ -506,90 +332,74 @@ export function generateMorningReminderHtml(data: MorningReportData, reportDate:
   <title>Morning Reminder - ${dateStr}</title>
   <style>${styles}</style>
 </head>
-<body>
-  <div class="container">
-    <h1>${dateStr} - Morning To Do Reminder</h1>
-    <div style="font-size: 13px; color: #666; margin-bottom: 16px;">
-      4pm – 7am · ${data.overnightReceived} received, ${data.overnightSent} sent overnight
-    </div>
-
-    ${unresolvedTodos.length > 0 ? `
-    <div class="section-action-items">
-      <h2>Action Items (${unresolvedTodos.length})</h2>
-      ${data.pendingTodos.map((todo) => {
-        const label = getTodoLabel(todo.todoType);
-        const labelColor = label.class === "urgent" ? "#dc2626" : "#d97706";
-        const timestamp = formatTimestamp(todo.originalDate);
-        return `
-        <div class="todo-item ${todo.resolved ? "todo-resolved" : ""}" data-thread-key="${escapeHtml(todo.threadKey)}">
-          <div class="todo-label" style="${todo.resolved ? "" : `color: ${labelColor};`}">${label.text}</div>
-          <div class="todo-content">
-            <div class="todo-header">
-              <div class="todo-subject">
-                ${escapeHtml(todo.subject || "(no subject)")}
-                ${todo.resolved ? '<span class="resolved-tag">resolved</span>' : ""}
-              </div>
-              ${todo.resolved
-                ? '<button class="todo-complete-btn completed" disabled>Completed</button>'
-                : `<button class="todo-complete-btn" data-thread-key="${escapeHtml(todo.threadKey)}">Mark Complete</button>`
-              }
-            </div>
-            <div class="todo-from">${escapeHtml(todo.contactName || todo.contactEmail || "Unknown")}${timestamp ? ` · ${timestamp}` : ""}</div>
-            ${todo.description ? `<div class="todo-summary">${escapeHtml(todo.description)}</div>` : ""}
-          </div>
+<body style="font-family: Arial, Helvetica, sans-serif; line-height: 1.5; color: #333333; margin: 0; padding: 16px; background-color: #f5f5f5;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 700px; margin: 0 auto;">
+    <tr>
+      <td style="background-color: #ffffff; padding: 20px;">
+        <h1 style="color: #1a1a1a; margin: 0 0 16px 0; font-size: 20px;">${dateStr} - Morning To Do Reminder</h1>
+        <div style="font-size: 13px; color: #666666; margin-bottom: 16px;">
+          4pm – 7am · ${data.overnightReceived} received, ${data.overnightSent} sent overnight
         </div>
-      `}).join("")}
-    </div>
-    ` : `
-    <div class="section">
-      <div class="empty-state">No pending items</div>
-    </div>
-    `}
 
-    ${(() => {
-      // Filter threads: only show NEW threads or threads needing action
-      const shouldShow = (t: CategorizedThread) => t.isNewThread || t.needsResponse;
+        ${unresolvedTodos.length > 0 ? `
+        <table width="100%" cellpadding="16" cellspacing="0" style="background-color: #fef3c7; border: 1px solid #f59e0b; margin-bottom: 24px;">
+          <tr>
+            <td>
+              <h2 style="color: #92400e; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 1px solid #f59e0b;">Action Items (${unresolvedTodos.length})</h2>
+              ${displayTodos.map(renderDisplayTodo).join("")}
+            </td>
+          </tr>
+        </table>
+        ` : `
+        <div style="color: #999999; font-size: 13px; padding: 12px 0;">No pending items</div>
+        `}
 
-      const overnightCustomers = data.overnightEmails.filter(t => t.category === "customer" && shouldShow(t));
-      const overnightVendors = data.overnightEmails.filter(t => t.category === "vendor" && shouldShow(t));
-      const overnightOther = data.overnightEmails.filter(t => t.category === "other");
-      const overnightHandled = data.overnightEmails.filter(t =>
-        (t.category === "customer" || t.category === "vendor") && !shouldShow(t)
-      );
+        ${(() => {
+          // Filter threads: only show NEW threads or threads needing action
+          const shouldShow = (t: CategorizedThread) => t.isNewThread || t.needsResponse;
 
-      if (data.overnightEmails.length === 0) return "";
+          const overnightCustomers = data.overnightEmails.filter(t => t.category === "customer" && shouldShow(t));
+          const overnightVendors = data.overnightEmails.filter(t => t.category === "vendor" && shouldShow(t));
+          const overnightOther = data.overnightEmails.filter(t => t.category === "other");
+          const overnightHandled = data.overnightEmails.filter(t =>
+            (t.category === "customer" || t.category === "vendor") && !shouldShow(t)
+          );
 
-      const allIgnored = [...overnightOther, ...overnightHandled];
-      const ignoredNote = allIgnored.length > 0
-        ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
-            <strong>Ignored (${allIgnored.length}):</strong>
-            <ul style="margin: 8px 0 0 0; padding-left: 20px;">
-              ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
-            </ul>
-          </div>`
-        : "";
+          if (data.overnightEmails.length === 0) return "";
 
-      const totalShown = overnightCustomers.length + overnightVendors.length;
-      return `
-      <div class="section">
-        <h2>Overnight (${totalShown})</h2>
-        ${overnightCustomers.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Customers (${overnightCustomers.length})</h3>
-          ${sortThreadsByItemType(overnightCustomers).map(renderThread).join("")}
-        ` : ""}
-        ${overnightVendors.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Vendors (${overnightVendors.length})</h3>
-          ${sortThreadsByItemType(overnightVendors).map(renderThread).join("")}
-        ` : ""}
-        ${ignoredNote}
-      </div>
-      `;
-    })()}
+          const allIgnored = [...overnightOther, ...overnightHandled];
+          const ignoredNote = allIgnored.length > 0
+            ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
+                <strong>Ignored (${allIgnored.length}):</strong>
+                <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+                  ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
+                </ul>
+              </div>`
+            : "";
 
-    <div class="footer">
-      4pm – 7am · ${data.overnightReceived} received, ${data.overnightSent} sent
-    </div>
-  </div>
+          const totalShown = overnightCustomers.length + overnightVendors.length;
+          return `
+          <div style="margin-bottom: 20px;">
+            <h2 style="color: #666666; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 1px solid #e0e0e0;">Overnight (${totalShown})</h2>
+            ${overnightCustomers.length > 0 ? `
+              <h3 style="font-size: 14px; color: #666666; margin: 16px 0 8px 0;">Customers (${overnightCustomers.length})</h3>
+              ${sortThreadsByItemType(overnightCustomers).map(renderThread).join("")}
+            ` : ""}
+            ${overnightVendors.length > 0 ? `
+              <h3 style="font-size: 14px; color: #666666; margin: 16px 0 8px 0;">Vendors (${overnightVendors.length})</h3>
+              ${sortThreadsByItemType(overnightVendors).map(renderThread).join("")}
+            ` : ""}
+            ${ignoredNote}
+          </div>
+          `;
+        })()}
+
+        <div style="margin-top: 20px; padding-top: 12px; border-top: 1px solid #e0e0e0; font-size: 11px; color: #999999; text-align: center;">
+          4pm – 7am · ${data.overnightReceived} received, ${data.overnightSent} sent
+        </div>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>
   `;
@@ -606,6 +416,18 @@ export function generateMiddayReportHtml(data: MiddayReportData, reportDate: Dat
 
   const unresolvedTodos = data.pendingTodos.filter(t => !t.resolved);
 
+  // Convert pendingTodos to DisplayTodo format for renderDisplayTodo
+  const displayTodos: DisplayTodo[] = data.pendingTodos.map(t => ({
+    threadKey: t.threadKey,
+    todoType: t.todoType,
+    description: t.description || "",
+    contactEmail: t.contactEmail,
+    contactName: t.contactName,
+    originalDate: t.originalDate,
+    subject: t.subject || "",
+    resolved: t.resolved || false,
+  }));
+
   return `
 <!DOCTYPE html>
 <html>
@@ -615,90 +437,74 @@ export function generateMiddayReportHtml(data: MiddayReportData, reportDate: Dat
   <title>Midday Report - ${dateStr}</title>
   <style>${styles}</style>
 </head>
-<body>
-  <div class="container">
-    <h1>${dateStr} - Midday Update</h1>
-    <div style="font-size: 13px; color: #666; margin-bottom: 16px;">
-      7am – 12pm · ${data.morningReceived} received, ${data.morningSent} sent
-    </div>
-
-    ${unresolvedTodos.length > 0 ? `
-    <div class="section-action-items">
-      <h2>Action Items (${unresolvedTodos.length})</h2>
-      ${data.pendingTodos.map((todo) => {
-        const label = getTodoLabel(todo.todoType);
-        const labelColor = label.class === "urgent" ? "#dc2626" : "#d97706";
-        const timestamp = formatTimestamp(todo.originalDate);
-        return `
-        <div class="todo-item ${todo.resolved ? "todo-resolved" : ""}" data-thread-key="${escapeHtml(todo.threadKey)}">
-          <div class="todo-label" style="${todo.resolved ? "" : `color: ${labelColor};`}">${label.text}</div>
-          <div class="todo-content">
-            <div class="todo-header">
-              <div class="todo-subject">
-                ${escapeHtml(todo.subject || "(no subject)")}
-                ${todo.resolved ? '<span class="resolved-tag">resolved</span>' : ""}
-              </div>
-              ${todo.resolved
-                ? '<button class="todo-complete-btn completed" disabled>Completed</button>'
-                : `<button class="todo-complete-btn" data-thread-key="${escapeHtml(todo.threadKey)}">Mark Complete</button>`
-              }
-            </div>
-            <div class="todo-from">${escapeHtml(todo.contactName || todo.contactEmail || "Unknown")}${timestamp ? ` · ${timestamp}` : ""}</div>
-            ${todo.description ? `<div class="todo-summary">${escapeHtml(todo.description)}</div>` : ""}
-          </div>
+<body style="font-family: Arial, Helvetica, sans-serif; line-height: 1.5; color: #333333; margin: 0; padding: 16px; background-color: #f5f5f5;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="max-width: 700px; margin: 0 auto;">
+    <tr>
+      <td style="background-color: #ffffff; padding: 20px;">
+        <h1 style="color: #1a1a1a; margin: 0 0 16px 0; font-size: 20px;">${dateStr} - Midday Update</h1>
+        <div style="font-size: 13px; color: #666666; margin-bottom: 16px;">
+          7am – 12pm · ${data.morningReceived} received, ${data.morningSent} sent
         </div>
-      `}).join("")}
-    </div>
-    ` : `
-    <div class="section">
-      <div class="empty-state">No pending items</div>
-    </div>
-    `}
 
-    ${(() => {
-      // Filter threads: only show NEW threads or threads needing action
-      const shouldShow = (t: CategorizedThread) => t.isNewThread || t.needsResponse;
+        ${unresolvedTodos.length > 0 ? `
+        <table width="100%" cellpadding="16" cellspacing="0" style="background-color: #fef3c7; border: 1px solid #f59e0b; margin-bottom: 24px;">
+          <tr>
+            <td>
+              <h2 style="color: #92400e; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 1px solid #f59e0b;">Action Items (${unresolvedTodos.length})</h2>
+              ${displayTodos.map(renderDisplayTodo).join("")}
+            </td>
+          </tr>
+        </table>
+        ` : `
+        <div style="color: #999999; font-size: 13px; padding: 12px 0;">No pending items</div>
+        `}
 
-      const morningCustomers = data.morningEmails.filter(t => t.category === "customer" && shouldShow(t));
-      const morningVendors = data.morningEmails.filter(t => t.category === "vendor" && shouldShow(t));
-      const morningOther = data.morningEmails.filter(t => t.category === "other");
-      const morningHandled = data.morningEmails.filter(t =>
-        (t.category === "customer" || t.category === "vendor") && !shouldShow(t)
-      );
+        ${(() => {
+          // Filter threads: only show NEW threads or threads needing action
+          const shouldShow = (t: CategorizedThread) => t.isNewThread || t.needsResponse;
 
-      if (data.morningEmails.length === 0) return "";
+          const morningCustomers = data.morningEmails.filter(t => t.category === "customer" && shouldShow(t));
+          const morningVendors = data.morningEmails.filter(t => t.category === "vendor" && shouldShow(t));
+          const morningOther = data.morningEmails.filter(t => t.category === "other");
+          const morningHandled = data.morningEmails.filter(t =>
+            (t.category === "customer" || t.category === "vendor") && !shouldShow(t)
+          );
 
-      const allIgnored = [...morningOther, ...morningHandled];
-      const ignoredNote = allIgnored.length > 0
-        ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
-            <strong>Ignored (${allIgnored.length}):</strong>
-            <ul style="margin: 8px 0 0 0; padding-left: 20px;">
-              ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
-            </ul>
-          </div>`
-        : "";
+          if (data.morningEmails.length === 0) return "";
 
-      const totalShown = morningCustomers.length + morningVendors.length;
-      return `
-      <div class="section">
-        <h2>This Morning (${totalShown})</h2>
-        ${morningCustomers.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Customers (${morningCustomers.length})</h3>
-          ${sortThreadsByItemType(morningCustomers).map(renderThread).join("")}
-        ` : ""}
-        ${morningVendors.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Vendors (${morningVendors.length})</h3>
-          ${sortThreadsByItemType(morningVendors).map(renderThread).join("")}
-        ` : ""}
-        ${ignoredNote}
-      </div>
-      `;
-    })()}
+          const allIgnored = [...morningOther, ...morningHandled];
+          const ignoredNote = allIgnored.length > 0
+            ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
+                <strong>Ignored (${allIgnored.length}):</strong>
+                <ul style="margin: 8px 0 0 0; padding-left: 20px;">
+                  ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
+                </ul>
+              </div>`
+            : "";
 
-    <div class="footer">
-      7am – 12pm · ${data.morningReceived} received, ${data.morningSent} sent
-    </div>
-  </div>
+          const totalShown = morningCustomers.length + morningVendors.length;
+          return `
+          <div style="margin-bottom: 20px;">
+            <h2 style="color: #666666; font-size: 13px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; margin: 0 0 10px 0; padding-bottom: 6px; border-bottom: 1px solid #e0e0e0;">This Morning (${totalShown})</h2>
+            ${morningCustomers.length > 0 ? `
+              <h3 style="font-size: 14px; color: #666666; margin: 16px 0 8px 0;">Customers (${morningCustomers.length})</h3>
+              ${sortThreadsByItemType(morningCustomers).map(renderThread).join("")}
+            ` : ""}
+            ${morningVendors.length > 0 ? `
+              <h3 style="font-size: 14px; color: #666666; margin: 16px 0 8px 0;">Vendors (${morningVendors.length})</h3>
+              ${sortThreadsByItemType(morningVendors).map(renderThread).join("")}
+            ` : ""}
+            ${ignoredNote}
+          </div>
+          `;
+        })()}
+
+        <div style="margin-top: 20px; padding-top: 12px; border-top: 1px solid #e0e0e0; font-size: 11px; color: #999999; text-align: center;">
+          7am – 12pm · ${data.morningReceived} received, ${data.morningSent} sent
+        </div>
+      </td>
+    </tr>
+  </table>
 </body>
 </html>
   `;
