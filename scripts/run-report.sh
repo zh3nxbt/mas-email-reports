@@ -56,34 +56,47 @@ transporter.sendMail({
 echo "========================================" >> "$LOG_FILE"
 echo "${TIMESTAMP}: Starting ${REPORT_TYPE} report" >> "$LOG_FILE"
 
-# Capture output and errors
-{
+# Run commands and capture exit status properly
+# (Previous version didn't capture npm failures because $? was checking echo's exit status)
+run_report() {
     # Sync emails first
     echo "Syncing emails..."
-    npm run sync
+    if ! npm run sync; then
+        echo "ERROR: Email sync failed"
+        return 1
+    fi
 
     # Run appropriate report
     if [ "$REPORT_TYPE" = "morning" ]; then
         echo "Generating morning report..."
-        npm run report:morning
+        if ! npm run report:morning; then
+            echo "ERROR: Morning report generation failed"
+            return 1
+        fi
     elif [ "$REPORT_TYPE" = "midday" ]; then
         echo "Generating midday report..."
-        npm run report:midday
+        if ! npm run report:midday; then
+            echo "ERROR: Midday report generation failed"
+            return 1
+        fi
     else
         echo "Generating daily summary..."
-        npm run report
+        if ! npm run report; then
+            echo "ERROR: Daily report generation failed"
+            return 1
+        fi
     fi
 
     echo "${TIMESTAMP}: Report complete"
+    return 0
+}
 
-} >> "$LOG_FILE" 2>&1
-
-# Check exit status
-if [ $? -ne 0 ]; then
-    ERROR_MSG=$(tail -20 "$LOG_FILE")
+# Run and capture output
+if run_report >> "$LOG_FILE" 2>&1; then
+    echo "$(date "+%Y-%m-%d %H:%M:%S %Z"): SUCCESS" >> "$LOG_FILE"
+else
+    ERROR_MSG=$(tail -30 "$LOG_FILE")
     echo "$(date "+%Y-%m-%d %H:%M:%S %Z"): FAILED" >> "$LOG_FILE"
     send_failure_email "$ERROR_MSG"
     exit 1
 fi
-
-echo "$(date "+%Y-%m-%d %H:%M:%S %Z"): SUCCESS" >> "$LOG_FILE"
