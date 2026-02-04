@@ -42,14 +42,22 @@ export function countEmailsByDirection(emails: Email[]): { received: number; sen
   return { received, sent };
 }
 
-// Check if an email is outbound (from us)
+// Check if an email is outbound (from us to external party)
 export function isOutbound(email: Email): boolean {
+  // If it's in INBOX, it's inbound - even if from an internal address (internal forwards)
+  // Internal forwards to INBOX still need action/response
+  if (email.mailbox === "INBOX") {
+    return false;
+  }
+
+  // Sent folders are always outbound
+  if (email.mailbox === "Sent" || email.mailbox === "Sent Items" || email.mailbox === "Sent Messages") {
+    return true;
+  }
+
+  // Fallback: check domain (for other mailboxes)
   const fromLower = email.fromAddress?.toLowerCase() || "";
-  return (
-    fromLower.includes(OUR_DOMAIN) ||
-    email.mailbox === "Sent" ||
-    email.mailbox === "Sent Items"
-  );
+  return fromLower.includes(OUR_DOMAIN);
 }
 
 // Get the external contact from a thread

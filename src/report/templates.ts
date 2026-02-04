@@ -390,7 +390,7 @@ function renderThreadSection(
 
   return `
     <div class="section">
-      <h2>${title}</h2>
+      <h2>${title} (${threads.length})</h2>
       ${sorted.map(renderThread).join("")}
     </div>
   `;
@@ -440,7 +440,7 @@ export function generateDailySummaryHtml(
   const allIgnored = [...otherThreads, ...handledThreads];
   const ignoredNote = allIgnored.length > 0
     ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
-        <strong>Ignored:</strong>
+        <strong>Ignored (${allIgnored.length}):</strong>
         <ul style="margin: 8px 0 0 0; padding-left: 20px;">
           ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
         </ul>
@@ -465,7 +465,7 @@ export function generateDailySummaryHtml(
 
     ${sortedTodos.length > 0 ? `
     <div class="section-action-items">
-      <h2>Action Items</h2>
+      <h2>Action Items (${sortedTodos.filter(t => !t.resolved).length})</h2>
       ${sortedTodos.map(renderDisplayTodo).join("")}
     </div>
     ` : ""}
@@ -515,7 +515,7 @@ export function generateMorningReminderHtml(data: MorningReportData, reportDate:
 
     ${unresolvedTodos.length > 0 ? `
     <div class="section-action-items">
-      <h2>Action Items</h2>
+      <h2>Action Items (${unresolvedTodos.length})</h2>
       ${data.pendingTodos.map((todo) => {
         const label = getTodoLabel(todo.todoType);
         const labelColor = label.class === "urgent" ? "#dc2626" : "#d97706";
@@ -562,22 +562,23 @@ export function generateMorningReminderHtml(data: MorningReportData, reportDate:
       const allIgnored = [...overnightOther, ...overnightHandled];
       const ignoredNote = allIgnored.length > 0
         ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
-            <strong>Ignored:</strong>
+            <strong>Ignored (${allIgnored.length}):</strong>
             <ul style="margin: 8px 0 0 0; padding-left: 20px;">
               ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
             </ul>
           </div>`
         : "";
 
+      const totalShown = overnightCustomers.length + overnightVendors.length;
       return `
       <div class="section">
-        <h2>Overnight</h2>
+        <h2>Overnight (${totalShown})</h2>
         ${overnightCustomers.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Customers</h3>
+          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Customers (${overnightCustomers.length})</h3>
           ${sortThreadsByItemType(overnightCustomers).map(renderThread).join("")}
         ` : ""}
         ${overnightVendors.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Vendors</h3>
+          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Vendors (${overnightVendors.length})</h3>
           ${sortThreadsByItemType(overnightVendors).map(renderThread).join("")}
         ` : ""}
         ${ignoredNote}
@@ -623,7 +624,7 @@ export function generateMiddayReportHtml(data: MiddayReportData, reportDate: Dat
 
     ${unresolvedTodos.length > 0 ? `
     <div class="section-action-items">
-      <h2>Action Items</h2>
+      <h2>Action Items (${unresolvedTodos.length})</h2>
       ${data.pendingTodos.map((todo) => {
         const label = getTodoLabel(todo.todoType);
         const labelColor = label.class === "urgent" ? "#dc2626" : "#d97706";
@@ -670,22 +671,23 @@ export function generateMiddayReportHtml(data: MiddayReportData, reportDate: Dat
       const allIgnored = [...morningOther, ...morningHandled];
       const ignoredNote = allIgnored.length > 0
         ? `<div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid #e5e7eb; font-size: 12px; color: #9ca3af;">
-            <strong>Ignored:</strong>
+            <strong>Ignored (${allIgnored.length}):</strong>
             <ul style="margin: 8px 0 0 0; padding-left: 20px;">
               ${allIgnored.map(t => `<li>${escapeHtml(t.subject || "(no subject)")}</li>`).join("")}
             </ul>
           </div>`
         : "";
 
+      const totalShown = morningCustomers.length + morningVendors.length;
       return `
       <div class="section">
-        <h2>This Morning</h2>
+        <h2>This Morning (${totalShown})</h2>
         ${morningCustomers.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Customers</h3>
+          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Customers (${morningCustomers.length})</h3>
           ${sortThreadsByItemType(morningCustomers).map(renderThread).join("")}
         ` : ""}
         ${morningVendors.length > 0 ? `
-          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Vendors</h3>
+          <h3 style="font-size: 14px; color: #666; margin: 16px 0 8px 0;">Vendors (${morningVendors.length})</h3>
           ${sortThreadsByItemType(morningVendors).map(renderThread).join("")}
         ` : ""}
         ${ignoredNote}
